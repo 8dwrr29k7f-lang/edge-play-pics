@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-14T17:56:45.671Z",
+  "notes": "Self-learning ledger. Day-1 seed until leg-level grades. /logpick /grade /track /review.",
+  "seedSummary": {
+    "label": "day-1 reviewed picks",
+    "wins": 2,
+    "losses": 3,
+    "pushes": 0,
+    "units": -1.86,
+    "roiPct": -31.6,
+    "source": "manual review first slate"
+  },
+  "picks": []
+}
