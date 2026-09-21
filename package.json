@@ -1,0 +1,20 @@
+{
+  "name": "edge-play-pics",
+  "version": "4.1.0",
+  "description": "EDGE PLAY PICS — Discord desk with live OpticOdds optional + static premium fallback",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "register": "node src/register-commands.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}
