@@ -9,7 +9,8 @@ const copies = [
   ["overlay_mediaFollow.js", path.join("src", "mediaFollow.js")],
   ["overlay_dailyRoll.js", path.join("src", "dailyRoll.js")],
   ["overlay_categoryEmbed.js", path.join("src", "categoryEmbed.js")],
-  ["overlay_analyticsEngine.js", path.join("src", "analyticsEngine.js")]
+  ["overlay_analyticsEngine.js", path.join("src", "analyticsEngine.js")],
+  ["overlay_liveEmbeds.js", path.join("src", "liveEmbeds.js")]
 ];
 for (const [src, dest] of copies) {
   if (fs.existsSync(src)) {
@@ -29,12 +30,6 @@ if (!t.includes("registerCommandsOnBoot") && t.includes('from "./dailyRoll.js"')
   t = t.replace(
     "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);",
     "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);\n  await registerCommandsOnBoot();"
-  );
-}
-if (!t.includes("valueBoardEmbed")) {
-  t = t.replace(
-    'import { lotdEmbed, liveCardEmbed, locksTodayEmbed } from "./lotdEmbed.js";',
-    'import { lotdEmbed, liveCardEmbed, locksTodayEmbed, valueBoardEmbed, propsEmbed, parlaysEmbed } from "./lotdEmbed.js";'
   );
 }
 fs.writeFileSync(indexPath, t);
