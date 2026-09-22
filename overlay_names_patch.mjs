@@ -1,14 +1,20 @@
-/** Inject named team picks into dailyRoll — e.g. PHI ML, NYY ML */
+/** Named team picks: PHI ML, NYY ML, etc. + force ensureTodayCard */
 import fs from "fs";
 import path from "path";
 
 const f = path.join("src", "dailyRoll.js");
-if (!fs.existsSync(f)) process.exit(0);
+if (!fs.existsSync(f)) {
+  console.log("no dailyRoll");
+  process.exit(0);
+}
 let t = fs.readFileSync(f, "utf8");
 
 if (!t.includes("function teamsFromGame")) {
-  const insertAfter = "return { sport: sport.toUpperCase(), game, status, live, final, raw: line };\n}";
-  const helper = `
+  const marker = "raw: line };";
+  const idx = t.indexOf(marker);
+  if (idx >= 0) {
+    const at = t.indexOf("\n}", idx) + 2;
+    const helper = `
 function teamsFromGame(game) {
   const core = (game || "").split("·")[0].trim();
   const m = core.match(/^(.+?)\\s+@\\s+(.+)$/);
@@ -16,19 +22,8 @@ function teamsFromGame(game) {
   return { away: null, home: core, label: core };
 }
 `;
-  if (t.includes("raw: line")) {
-    t = t.replace(
-      "return { sport: sport.toUpperCase(), game, status, live, final, raw: line };",
-      "return { sport: sport.toUpperCase(), game, status, live, final, raw: line };"
-    );
-    // insert helper after parseEspnLine closing brace once
-    const marker = "raw: line };\n}";
-    const idx = t.indexOf(marker);
-    if (idx >= 0) {
-      const at = idx + marker.length;
-      t = t.slice(0, at) + "\n" + helper + t.slice(at);
-      console.log("teamsFromGame injected");
-    }
+    t = t.slice(0, at) + helper + t.slice(at);
+    console.log("teamsFromGame injected");
   }
 }
 
@@ -44,10 +39,10 @@ function processPickFromGame(g) {
   const away = teams.away || "AWAY";
   const label = teams.label || g.game;
   const statusBit = g.status ? " · " + g.status : "";
-  if (g.final || /Postponed|Delayed|Cancel/i.test(g.status || "") || /Postponed|Delayed/i.test(g.game || "")) {
+  if (g.final || /Postponed|Delayed|Cancel/i.test((g.status || "") + (g.game || ""))) {
     return {
       sport: g.sport, tier: "PASS", game: label + statusBit,
-      selection: g.final ? home + " / " + away + " — FINAL" : home + " / " + away + " — OFF",
+      selection: home + " / " + away + (g.final ? " — FINAL" : " — OFF"),
       price: "—", units: 0, why: "🚫 PASS · no ticket",
       type: "ml", kalshi: true, live: false, final: !!g.final
     };
@@ -78,5 +73,23 @@ function processPickFromGame(g) {
 }
 
 t = t.replace("const picks = games.map(processPickFromGame);", "let picks = games.map(processPickFromGame);");
+
+if (t.includes("export async function ensureTodayCard")) {
+  t = t.replace(
+    /export async function ensureTodayCard\(\) \{[\s\S]*?\n\}/,
+    `export async function ensureTodayCard() {
+  const c = getDailyCard();
+  const needsNames =
+    !c?.picks?.length ||
+    c.picks.every((p) =>
+      /process|Confirmed SP|Soft-side|Lineup-confirmed|Wait SP|Board scan/i.test(p.selection || "")
+    );
+  if (needsNames) return rollDailyCard({ force: true });
+  return refreshLiveFlags(c);
+}`
+  );
+  console.log("ensureTodayCard forced for named picks");
+}
+
 fs.writeFileSync(f, t);
-console.log("overlay_names_patch done");
+console.log("overlay_names_patch done — real named locks ready");
