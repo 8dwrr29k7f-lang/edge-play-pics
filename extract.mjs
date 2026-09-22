@@ -1,7 +1,7 @@
-/** Always unpack src.zip → src/ so Railway gets latest desk code */
 import fs from "fs";
 import path from "path";
 import { createRequire } from "module";
+import { execSync } from "child_process";
 
 if (!fs.existsSync("src.zip")) {
   if (fs.existsSync(path.join("src", "index.js"))) {
@@ -12,29 +12,40 @@ if (!fs.existsSync("src.zip")) {
   process.exit(1);
 }
 
-const require = createRequire(import.meta.url);
-let AdmZip;
-try {
-  AdmZip = require("adm-zip");
-} catch {
-  console.error("FATAL: adm-zip missing — npm install failed?");
-  process.exit(1);
-}
-
-console.log("Unpacking src.zip into src/ (node adm-zip)...");
 fs.mkdirSync("src", { recursive: true });
-const zip = new AdmZip("src.zip");
-zip.extractAllTo("src", true);
-
-const indexPath = path.join("src", "index.js");
-if (!fs.existsSync(indexPath)) {
-  console.error("FATAL: src/index.js missing after unpack");
+let ok = false;
+try {
+  const require = createRequire(import.meta.url);
+  const AdmZip = require("adm-zip");
+  console.log("Unpacking src.zip with adm-zip...");
+  new AdmZip("src.zip").extractAllTo("src", true);
+  ok = true;
+} catch (e) {
+  console.warn("adm-zip failed:", e.message);
+}
+if (!ok) {
   try {
-    console.error(fs.readdirSync("src").join(", "));
-  } catch {}
+    execSync("unzip -qo src.zip -d src", { stdio: "inherit" });
+    ok = true;
+  } catch (e) {
+    console.warn("unzip failed:", e.message);
+  }
+}
+if (!ok) {
+  try {
+    execSync("python3 -c \"import zipfile; zipfile.ZipFile('src.zip').extractall('src')\"", { stdio: "inherit" });
+    ok = true;
+  } catch (e) {
+    console.warn("python extract failed:", e.message);
+  }
+}
+if (!fs.existsSync(path.join("src", "index.js"))) {
+  if (fs.existsSync(path.join("src", "src", "index.js"))) {
+    execSync("cp -r src/src/* src/ && rm -rf src/src", { stdio: "inherit" });
+  }
+}
+if (!fs.existsSync(path.join("src", "index.js"))) {
+  console.error("FATAL: src/index.js missing after unpack");
   process.exit(1);
 }
-console.log(
-  "Unpack OK — modules:",
-  fs.readdirSync("src").filter((f) => f.endsWith(".js")).length
-);
+console.log("src.zip unpacked OK");
