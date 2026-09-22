@@ -1,4 +1,4 @@
-/** Patch unpacked src/index.js to auto-register slash commands on boot */
+/** Patch unpacked bot: auto-register commands + ensure /lotd /live /lock handlers */
 import fs from "fs";
 import path from "path";
 
@@ -17,30 +17,57 @@ if (!fs.existsSync(indexPath)) {
 }
 
 let t = fs.readFileSync(indexPath, "utf8");
-if (t.includes("registerCommandsOnBoot")) {
-  console.log("index.js already has auto-register");
-  process.exit(0);
+
+// 1) Auto-register on boot
+if (!t.includes("registerCommandsOnBoot")) {
+  if (t.includes('from "./dailyRoll.js"')) {
+    t = t.replace(
+      'import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";',
+      'import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";\nimport { registerCommandsOnBoot } from "./registerOnBoot.js";'
+    );
+  }
+  t = t.replace(
+    "client.once(Events.ClientReady, (c) => {",
+    "client.once(Events.ClientReady, async (c) => {"
+  );
+  t = t.replace(
+    "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);",
+    "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);\n  await registerCommandsOnBoot();"
+  );
+  console.log("Patched auto-register");
 }
 
-if (!t.includes('from "./dailyRoll.js"')) {
-  console.warn("patch-register: unexpected index.js shape");
-  process.exit(0);
+// 2) Ensure /lotd /lock /live /hedge handlers exist
+if (!t.includes('name === "lotd"')) {
+  const needle = `if (name === "hold") {
+      await interaction.reply({ embeds: [holdEmbed()] });
+      return;
+    }`;
+  const insert = `if (name === "hold") {
+      await interaction.reply({ embeds: [holdEmbed()] });
+      return;
+    }
+    if (name === "lotd" || name === "lock") {
+      await interaction.reply({ embeds: [lotdEmbed()] });
+      return;
+    }
+    if (name === "live") {
+      await interaction.reply({ embeds: [liveCardEmbed(), locksTodayEmbed()] });
+      return;
+    }
+    if (name === "hedge" || name === "cashout") {
+      await interaction.reply({ embeds: [hedgesEmbed()] });
+      return;
+    }`;
+  if (t.includes(needle)) {
+    t = t.replace(needle, insert);
+    console.log("Patched /lotd /live /lock /hedge handlers");
+  } else {
+    console.warn("Could not find hold handler to patch lotd");
+  }
+} else {
+  console.log("/lotd handler already present");
 }
-
-t = t.replace(
-  'import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";',
-  'import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";\nimport { registerCommandsOnBoot } from "./registerOnBoot.js";'
-);
-
-t = t.replace(
-  "client.once(Events.ClientReady, (c) => {",
-  "client.once(Events.ClientReady, async (c) => {"
-);
-
-t = t.replace(
-  "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);",
-  "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);\n  await registerCommandsOnBoot();"
-);
 
 fs.writeFileSync(indexPath, t);
-console.log("Patched index.js for auto slash register");
+console.log("patch-register done");
