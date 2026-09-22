@@ -1,0 +1,3 @@
+# Ensure python is available to unpack src.zip at runtime
+[phases.setup]
+nixPkgs = ["python3", "nodejs_20"]
