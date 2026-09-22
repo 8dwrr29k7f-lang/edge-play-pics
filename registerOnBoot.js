@@ -1,21 +1,11 @@
-/**
- * Auto-register slash commands when the bot starts
- */
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import { config } from "./config.js";
 
 const sportCmds = [
-  ["kbo", "KBO desk"],
-  ["npb", "NPB desk"],
-  ["tennis", "Tennis desk"],
-  ["soccer", "Soccer desk"],
-  ["mma", "MMA desk"],
-  ["boxing", "Boxing desk"],
-  ["mlb", "MLB desk"],
-  ["nfl", "NFL desk"],
-  ["nba", "NBA desk"],
-  ["esports", "Esports desk"],
-  ["kalshi", "Kalshi desk"]
+  ["kbo", "KBO desk"], ["npb", "NPB desk"], ["tennis", "Tennis desk"],
+  ["soccer", "Soccer desk"], ["mma", "MMA desk"], ["boxing", "Boxing desk"],
+  ["mlb", "MLB desk"], ["nfl", "NFL desk"], ["nba", "NBA desk"],
+  ["esports", "Esports desk"], ["kalshi", "Kalshi desk"]
 ];
 
 function buildCommands() {
@@ -34,8 +24,13 @@ function buildCommands() {
     new SlashCommandBuilder().setName("lock").setDescription("Play of the Day alias"),
     new SlashCommandBuilder().setName("live").setDescription("Live card all picks"),
     new SlashCommandBuilder().setName("best").setDescription("Best bets"),
-    new SlashCommandBuilder().setName("locks").setDescription("LOCKS and CAPs"),
+    new SlashCommandBuilder().setName("locks").setDescription("LOCKS and lockable"),
     new SlashCommandBuilder().setName("media").setDescription("Media bets map"),
+    new SlashCommandBuilder().setName("value").setDescription("VALUE picks clear take list"),
+    new SlashCommandBuilder().setName("props").setDescription("Player props section"),
+    new SlashCommandBuilder().setName("prop").setDescription("Player props alias"),
+    new SlashCommandBuilder().setName("parlay").setDescription("Parlay indications"),
+    new SlashCommandBuilder().setName("parlays").setDescription("Parlays alias"),
     new SlashCommandBuilder().setName("scan").setDescription("Force scan and post"),
     new SlashCommandBuilder().setName("refresh").setDescription("Force refresh"),
     new SlashCommandBuilder().setName("picks").setDescription("All live picks"),
@@ -47,27 +42,9 @@ function buildCommands() {
     new SlashCommandBuilder().setName("learn").setDescription("W/L model"),
     new SlashCommandBuilder().setName("review").setDescription("Self-review"),
     new SlashCommandBuilder().setName("pending").setDescription("Pending picks"),
-    new SlashCommandBuilder()
-      .setName("logpick")
-      .setDescription("Log a pick")
-      .addStringOption((o) => o.setName("sport").setDescription("Sport").setRequired(true))
-      .addStringOption((o) => o.setName("selection").setDescription("Pick").setRequired(true))
-      .addNumberOption((o) => o.setName("odds").setDescription("American odds").setRequired(true))
-      .addNumberOption((o) => o.setName("units").setDescription("Units").setRequired(true))
-      .addStringOption((o) => o.setName("label").setDescription("LOCK CAP VALUE LEAN"))
-      .addStringOption((o) => o.setName("market").setDescription("ml spread total"))
-      .addStringOption((o) => o.setName("game").setDescription("Matchup"))
-      .addStringOption((o) => o.setName("reasons").setDescription("Why")),
-    new SlashCommandBuilder()
-      .setName("grade")
-      .setDescription("Grade a pick")
-      .addStringOption((o) => o.setName("result").setDescription("win loss push").setRequired(true))
-      .addStringOption((o) => o.setName("id").setDescription("Pick id"))
-      .addStringOption((o) => o.setName("selection").setDescription("Selection"))
-      .addNumberOption((o) => o.setName("closing").setDescription("Closing odds")),
     new SlashCommandBuilder().setName("status").setDescription("Bot status"),
     new SlashCommandBuilder().setName("help").setDescription("Command menu"),
-    ...sportCmds.map(([name, desc]) => new SlashCommandBuilder().setName(name).setDescription(desc))
+    ...sportCmds.map(([n, d]) => new SlashCommandBuilder().setName(n).setDescription(d))
   ].map((c) => c.toJSON());
 }
 
@@ -81,13 +58,12 @@ export async function registerCommandsOnBoot() {
   try {
     if (config.guildId) {
       await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body });
-      console.log("Slash commands registered guild", config.guildId, "count", body.length);
+      console.log("Slash commands registered guild", config.guildId, body.length);
     } else {
       await rest.put(Routes.applicationCommands(config.clientId), { body });
       console.log("Slash commands registered GLOBAL", body.length);
     }
   } catch (e) {
     console.error("registerOnBoot FAILED:", e.message);
-    console.error("Check CLIENT_ID = Application ID and GUILD_ID = server id");
   }
 }
