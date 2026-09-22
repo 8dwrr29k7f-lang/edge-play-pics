@@ -3,7 +3,7 @@ try {
   const require = createRequire(import.meta.url);
   require("dotenv").config();
 } catch {
-  /* Railway injects env */
+  /* Railway injects env — dotenv optional */
 }
 
 export const config = {
@@ -16,10 +16,34 @@ export const config = {
   scanMinutes: Math.max(5, Number(process.env.SCAN_MINUTES || 15)),
   apiBase: process.env.EDGE_PLAY_API || "",
   colors: {
-    navy: 0x0b1c2d,
+    navy: 0x0a1628,
     gold: 0xc4a35a,
+    take: 0x7dcea0,
+    sit: 0xd98880,
+    lean: 0xc4a35a,
+    muted: 0x2a3544,
+    lock: 0xf1c40f,
     green: 0x2ecc71,
     red: 0xe74c3c,
     blue: 0x3498db
+  },
+  rules: {
+    maxTickets: 2,
+    maxUnitsAm: 0.75,
+    maxUnitsDay: 5,
+    sitCents: 0.72,
+    lockCentsMax: 0.65,
+    lockAmericanMax: -150
   }
 };
+
+/** Validate required env — call once at boot */
+export function assertConfig() {
+  if (!config.token) {
+    console.error("FATAL: Missing DISCORD_TOKEN — set it in Railway Variables");
+    process.exit(1);
+  }
+  if (!config.clientId) {
+    console.warn("CLIENT_ID missing — slash command registration may fail");
+  }
+}
