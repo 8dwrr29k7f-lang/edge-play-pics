@@ -4,113 +4,137 @@ import { config } from "./config.js";
 
 const { colors } = config;
 
+function analysisBlock(r, why) {
+  if (!r || typeof r !== "object") {
+    return why ? `_${why}_` : "_Run `/daily` for full analysis._";
+  }
+  return (
+    `**Form:** ${r.form || "—"}\n` +
+    `**Spot:** ${r.situational || r.serve || "—"}\n` +
+    `**Number:** ${r.number || "—"}\n` +
+    `**Media:** ${r.media || "Check /media — desk sizes units"}\n` +
+    `**Kill:** ${r.kill || "—"}\n` +
+    `**Call:** ${r.decision || r.prediction || why || "—"}`
+  );
+}
+
 export function lotdEmbed() {
-  const L = lockOfTheDay;
+  const L = lockOfTheDay || {};
   const a = L.analysis || {};
   return new EmbedBuilder()
     .setColor(0xf4d03f)
-    .setTitle("👑 PLAY OF THE DAY")
+    .setTitle("👑 LOCK OF THE DAY · FULL ANALYSIS")
     .setDescription(
-      `**${L.pick}**\n${L.event} · ${L.match}\n**Market:** ${L.market}\n**Price:** ${L.priceGuide}\n**Size:** **${L.units}u** · **${L.tier}**\n\n### Form\n${a.form || "—"}\n\n### Spot\n${a.situational || a.serve || "—"}\n\n### Kill\n${a.kill || "—"}\n\n### Call\n**${a.prediction || "—"}**`
+      `**${L.pick || "Run /daily"}**\n` +
+        `${L.event || ""} · ${L.match || ""}\n` +
+        `**Market:** ${L.market || "—"}\n` +
+        `**Price:** ${L.priceGuide || "—"}\n` +
+        `**Size:** **${L.units ?? "—"}u** · **${L.tier || "LOCK OF THE DAY"}**\n\n` +
+        `### Form\n${a.form || "—"}\n\n` +
+        `### Spot / Situation\n${a.situational || a.serve || "—"}\n\n` +
+        `### Number\n${a.number || L.priceGuide || "—"}\n\n` +
+        `### Media\n${a.media || "IG / X / TG = signal only. Desk sizes the bet — /media"}\n\n` +
+        `### What kills it\n${a.kill || "—"}\n\n` +
+        `### Call\n**${a.prediction || a.decision || "—"}**`
     )
-    .setFooter({ text: `${L.date || ""} · EDGE PLAY · 21+` })
+    .setFooter({ text: `${L.date || ""} · EDGE PLAY · analysis · 21+` })
     .setTimestamp();
 }
 
 export function liveCardEmbed() {
-  const c = liveCard;
+  const c = liveCard || { picks: [] };
   const e = new EmbedBuilder()
-    .setColor(colors.gold || 0xc4a35a)
-    .setTitle("📡 LIVE CARD · CLEAR INDICATION")
+    .setColor(colors?.gold || 0xc4a35a)
+    .setTitle("📡 LIVE CARD · TAKES + ANALYSIS")
     .setDescription(`**${c.dateLabel || "TODAY"}**\n✅ TAKE · 💎 VALUE · ➖ LEAN · ⏸️ HOLD · 🚫 PASS`)
-    .setFooter({ text: "EDGE PLAY · 21+" })
+    .setFooter({ text: "EDGE PLAY · full analysis · 21+" })
     .setTimestamp();
-  for (const p of (c.picks || []).slice(0, 12)) {
+  for (const p of (c.picks || []).slice(0, 10)) {
     const take =
       p.tier === "LOCK" || p.tier === "CAP"
         ? `✅ **TAKE · LOCK** ${p.selection}`
         : p.tier === "VALUE"
           ? `💎 **VALUE · TAKE** ${p.selection}`
           : p.tier === "LEAN"
-            ? `➖ **LEAN · SMALL** ${p.selection}`
+            ? `➖ **LEAN · TAKE** ${p.selection}`
             : p.tier === "HOLD"
-              ? `⏸️ **HOLD · NO TICKET YET** ${p.selection}`
-              : `🚫 **PASS · DO NOT BET**`;
-    const r = p.reasoning;
-    const thought = r
-      ? `\n**Analysis**\n• Form: ${r.form}\n• Spot: ${r.situational}\n• Number: ${r.number}\n• Kill: ${r.kill}\n• **${r.decision}**`
-      : `\n_${p.why || ""}_`;
+              ? `⏸️ **HOLD** ${p.selection}`
+              : `🚫 **PASS**`;
     e.addFields({
-      name: `${p.tier} · ${p.sport}`,
-      value: `${take}\n**${p.game}**\nPrice: ${p.price} · **${p.units}u**${thought}`.slice(0, 1020),
+      name: `${p.tier} · ${p.sport}`.slice(0, 256),
+      value: (`${take}\n**${p.game}**\nPrice: ${p.price} · **${p.units}u**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
       inline: false
     });
   }
+  if (!(c.picks || []).length) e.setDescription("No picks — run `/daily`.");
   return e;
 }
 
 export function locksTodayEmbed() {
-  const locks = (liveCard.picks || []).filter((p) => p.tier === "LOCK" || p.tier === "CAP");
-  const leans = (liveCard.picks || []).filter((p) => p.tier === "LEAN" || p.potd).slice(0, 6);
-  const e = new EmbedBuilder()
-    .setColor(0xf4d03f)
-    .setTitle("🔒 LOCKS & LOCKABLE")
-    .setTimestamp()
-    .setFooter({ text: "EDGE PLAY · analysis · 21+" });
+  const locks = (liveCard?.picks || []).filter((p) => p.tier === "LOCK" || p.tier === "CAP" || p.potd);
+  const leans = (liveCard?.picks || []).filter((p) => p.tier === "LEAN" || p.tier === "VALUE").slice(0, 6);
+  const e = new EmbedBuilder().setColor(0xf4d03f).setTitle("🔒 LOCKS · FULL ANALYSIS").setTimestamp().setFooter({ text: "EDGE PLAY · analysis · 21+" });
   if (lockOfTheDay?.pick) {
     const a = lockOfTheDay.analysis || {};
     e.addFields({
-      name: `👑 ${lockOfTheDay.tier || "PLAY OF THE DAY"}`,
-      value: (`✅ **${lockOfTheDay.pick}**\n**Form:** ${a.form || "—"}\n**Spot:** ${a.situational || "—"}\n**Kill:** ${a.kill || "—"}\n**Call:** ${a.prediction || "—"}\nPrice: ${lockOfTheDay.priceGuide} · **${lockOfTheDay.units}u**`).slice(0, 1020),
+      name: `👑 ${lockOfTheDay.tier || "LOCK OF THE DAY"}`,
+      value: (`✅ **${lockOfTheDay.pick}**\n${lockOfTheDay.match || ""}\n**Price:** ${lockOfTheDay.priceGuide} · **${lockOfTheDay.units}u**\n` + analysisBlock(a, lockOfTheDay.pick)).slice(0, 1020),
       inline: false
     });
   }
   for (const p of locks.slice(0, 5)) {
-    e.addFields({ name: `🔒 ${p.sport}`, value: `✅ **TAKE ${p.selection}**\n**${p.game}**\n${p.price} · **${p.units}u**\n_${p.why}_`.slice(0, 1020), inline: false });
-  }
-  for (const p of leans) {
-    const r = p.reasoning || {};
     e.addFields({
-      name: `➖ LOCKABLE · ${p.sport}`,
-      value: (`**${p.selection}**\n**${p.game}**\nGate: ${p.price} · **${p.units}u**\n**Form:** ${r.form || p.why}\n**Kill:** ${r.kill || "—"}\n**${r.decision || "LEAN"}**`).slice(0, 1020),
+      name: `🔒 ${p.sport} · ${p.selection}`.slice(0, 256),
+      value: (`✅ **TAKE** · ${p.price} · **${p.units}u**\n**${p.game}**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
       inline: false
     });
   }
-  if (!locks.length && !leans.length) e.setDescription("Run `/daily` to build lockable board.");
+  for (const p of leans) {
+    e.addFields({
+      name: `➖ ${p.tier} · ${p.sport}`.slice(0, 256),
+      value: (`**${p.selection}** · ${p.price} · **${p.units}u**\n**${p.game}**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
+      inline: false
+    });
+  }
+  if (!locks.length && !leans.length && !lockOfTheDay?.pick) e.setDescription("Run `/daily` — forces LOCK OF THE DAY + analysis.");
   return e;
 }
 
 export function valueBoardEmbed() {
-  const rows = liveCard.valueBoard || [];
-  const values = (liveCard.picks || []).filter((p) => p.tier === "VALUE");
-  const e = new EmbedBuilder().setColor(0x3498db).setTitle("💎 VALUE PICKS · CLEAR TAKE").setFooter({ text: "VALUE 0.35–0.5u · 21+" }).setTimestamp();
+  const values = (liveCard?.picks || []).filter((p) => p.tier === "VALUE");
+  const rows = liveCard?.valueBoard || [];
+  const e = new EmbedBuilder().setColor(0x3498db).setTitle("💎 VALUE · ANALYSIS").setFooter({ text: "VALUE 0.35–0.5u · 21+" }).setTimestamp();
   for (const p of values.slice(0, 6)) {
-    e.addFields({ name: `💎 VALUE · ${p.sport}`, value: `✅ **TAKE ${p.selection}**\n**${p.game}**\n${p.price} · **${p.units}u**\n_${p.why}_`, inline: false });
+    e.addFields({
+      name: `💎 ${p.sport}`,
+      value: (`✅ **TAKE ${p.selection}**\n**${p.game}**\n${p.price} · **${p.units}u**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
+      inline: false
+    });
   }
-  for (const r of rows.slice(0, 5)) {
+  for (const r of rows.slice(0, 4)) {
     e.addFields({ name: `💎 ${r.sport}`, value: `**${r.pick}**\n${r.price} · **${r.units}u**\n_${r.why}_`, inline: false });
   }
-  if (!values.length && !rows.length) e.setDescription("No VALUE rows — run `/daily`.");
+  if (!values.length && !rows.length) e.setDescription("Run `/daily` for VALUE + analysis.");
   return e;
 }
 
 export function propsEmbed() {
-  const rows = liveCard.playerPicks || [];
-  const e = new EmbedBuilder().setColor(0x9b59b6).setTitle("👤 PLAYER PROPS · CLEAR INDICATION").setFooter({ text: "props · 21+" }).setTimestamp();
+  const rows = liveCard?.playerPicks || [];
+  const e = new EmbedBuilder().setColor(0x9b59b6).setTitle("👤 PLAYER PROPS · ANALYSIS").setFooter({ text: "props · 21+" }).setTimestamp();
   for (const x of rows) {
     const icon = x.tier === "LOCK" || x.tier === "VALUE" ? "✅ TAKE" : x.tier === "LEAN" ? "➖ SMALL" : x.tier === "HOLD" ? "⏸️ HOLD" : "🚫 PASS";
-    e.addFields({ name: `${icon} · ${x.sport} · ${x.player}`, value: `**${x.market}** — ${x.side}\n**${x.tier}** · **${x.units}u**\n_${x.note}_`, inline: false });
+    e.addFields({ name: `${icon} · ${x.sport} · ${x.player}`, value: `**${x.market}** — ${x.side}\n**${x.tier}** · **${x.units}u**\n**Analysis:** ${x.note}`, inline: false });
   }
   if (!rows.length) e.setDescription("No props — run `/daily`.");
   return e;
 }
 
 export function parlaysEmbed() {
-  const rows = liveCard.parlays || [];
-  const e = new EmbedBuilder().setColor(0xe67e22).setTitle("🔗 PARLAYS · CLEAR INDICATION").setDescription("Max 2 legs LEAN+. Lotto = PASS for bankroll.").setFooter({ text: "parlays · 21+" }).setTimestamp();
+  const rows = liveCard?.parlays || [];
+  const e = new EmbedBuilder().setColor(0xe67e22).setTitle("🔗 PARLAYS · ANALYSIS").setDescription("Max 2 legs LEAN+. Lotto = PASS.").setFooter({ text: "parlays · 21+" }).setTimestamp();
   for (const p of rows) {
     const icon = p.tier === "VALUE" || p.tier === "LEAN" ? "✅ BUILD" : p.tier === "HOLD" ? "⏸️ WAIT" : "🚫 SKIP";
-    e.addFields({ name: `${icon} · ${p.name}`, value: `Legs:\n${(p.legs || []).map((l) => `• ${l}`).join("\n")}\n**${p.tier}** · **${p.units}u**\n_${p.note}_`, inline: false });
+    e.addFields({ name: `${icon} · ${p.name}`, value: `Legs:\n${(p.legs || []).map((l) => `• ${l}`).join("\n")}\n**${p.tier}** · **${p.units}u**\n**Analysis:** ${p.note}`, inline: false });
   }
   if (!rows.length) e.setDescription("Use two LEANs from `/live` max.");
   return e;
