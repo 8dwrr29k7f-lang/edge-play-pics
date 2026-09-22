@@ -1,11 +1,11 @@
 # Railway
 
-## Start command (required)
+## Start command
 ```
 sh start.sh
 ```
 
-This unpacks `src.zip` with **Python** (Railway often has no `unzip` binary).
+Unpacks `src.zip` with **Node adm-zip** (no system unzip/python required).
 
 ## Variables
 ```
@@ -19,6 +19,7 @@ TZ=America/Chicago
 
 ## Good logs
 ```
-Unpacking src.zip into src/ (python)...
+Unpacking src.zip into src/ (node adm-zip)...
+Unpack OK
 Launching node src/index.js
 ```
