@@ -1,5 +1,5 @@
 /**
- * EDGE PLAY PICS — desk data (minimal working shape)
+ * EDGE PLAY PICS — desk data (complete export surface)
  */
 
 export const limitsText = [
@@ -83,4 +83,33 @@ export const tennisBoard = {
   description: "No strong edges",
   takes: [],
   mediaLocks: []
+};
+
+/** Used by scanner.js */
+export const mediaBySport = {
+  title: "📡 MEDIA OVERALL BY SPORT",
+  lines: [
+    "**MLB** — quiet",
+    "**NFL** — quiet",
+    "**NBA** — quiet",
+    "**NHL** — quiet",
+    "**NCAAF** — quiet",
+    "**KBO** — quiet",
+    "**Kalshi** — quiet"
+  ]
+};
+
+/** Used by scanner.js */
+export const sportsDesk = {
+  title: "💎 ALL-SPORTS PREMIUM MAP",
+  description: "Premium bar by sport — EXCLUSIVE only when confirmed.",
+  sports: [
+    { sport: "MLB", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" },
+    { sport: "NFL", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" },
+    { sport: "NBA", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" },
+    { sport: "NHL", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" },
+    { sport: "NCAAF", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" },
+    { sport: "KBO", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" },
+    { sport: "Kalshi", kalshi: "—", premiumBar: "PASS", mediaOverall: "—", action: "WAIT" }
+  ]
 };
