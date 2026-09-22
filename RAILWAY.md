@@ -1,7 +1,18 @@
-# Railway
+# Railway fix for crash after publish
 
-1. New Project → Deploy from GitHub → `edge-play-pics`
-2. Variables:
+## Cause
+Safe start `node src/index.js` fails because `index.js` lives inside **src.zip**, not as a loose file.
+
+## Fix
+Start command must be:
+
+```
+sh start.sh
+```
+
+That script unpacks `src.zip` then runs the bot.
+
+## Variables (exact names)
 ```
 DISCORD_TOKEN=
 CLIENT_ID=
@@ -10,9 +21,13 @@ PICS_CHANNEL_ID=
 SCAN_MINUTES=15
 TZ=America/Chicago
 ```
-3. Start: `unzip -qo src.zip -d src; node src/index.js`
-4. Logs should show: `EDGE PLAY PICS online`
-5. In Discord: `/status` `/daily` `/lotd`
 
-Register commands once from any machine with Node + same env:
-`node src/register-commands.js`
+## After deploy
+Logs should show:
+```
+Unpacking src.zip into src/
+Launching node src/index.js
+EDGE PLAY PICS online
+```
+
+If you still see TOKEN errors, reset the bot token in Discord Developer Portal and paste the new one into Railway Variables.

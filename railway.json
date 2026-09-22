@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "unzip -qo src.zip -d src; node src/index.js",
+    "startCommand": "sh start.sh",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
