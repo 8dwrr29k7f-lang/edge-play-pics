@@ -8,7 +8,8 @@ const copies = [
   ["overlay_desk.js", path.join("src", "data", "desk.js")],
   ["overlay_mediaFollow.js", path.join("src", "mediaFollow.js")],
   ["overlay_dailyRoll.js", path.join("src", "dailyRoll.js")],
-  ["overlay_categoryEmbed.js", path.join("src", "categoryEmbed.js")]
+  ["overlay_categoryEmbed.js", path.join("src", "categoryEmbed.js")],
+  ["overlay_analyticsEngine.js", path.join("src", "analyticsEngine.js")]
 ];
 for (const [src, dest] of copies) {
   if (fs.existsSync(src)) {
@@ -34,12 +35,6 @@ if (!t.includes("valueBoardEmbed")) {
   t = t.replace(
     'import { lotdEmbed, liveCardEmbed, locksTodayEmbed } from "./lotdEmbed.js";',
     'import { lotdEmbed, liveCardEmbed, locksTodayEmbed, valueBoardEmbed, propsEmbed, parlaysEmbed } from "./lotdEmbed.js";'
-  );
-}
-if (t.includes('name === "media"') && !t.includes('getString("platform")') && !t.includes('getString?.("platform")')) {
-  t = t.replace(
-    `await interaction.editReply({ embeds: [await mediaFollowEmbed()] });`,
-    `const platform = interaction.options?.getString?.("platform") || null;\n      await interaction.editReply({ embeds: [await mediaFollowEmbed(platform)] });`
   );
 }
 fs.writeFileSync(indexPath, t);
