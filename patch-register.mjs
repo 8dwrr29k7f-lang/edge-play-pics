@@ -6,7 +6,9 @@ const copies = [
   ["registerOnBoot.js", path.join("src", "registerOnBoot.js")],
   ["overlay_lotdEmbed.js", path.join("src", "lotdEmbed.js")],
   ["overlay_desk.js", path.join("src", "data", "desk.js")],
-  ["overlay_mediaFollow.js", path.join("src", "mediaFollow.js")]
+  ["overlay_mediaFollow.js", path.join("src", "mediaFollow.js")],
+  ["overlay_dailyRoll.js", path.join("src", "dailyRoll.js")],
+  ["overlay_categoryEmbed.js", path.join("src", "categoryEmbed.js")]
 ];
 for (const [src, dest] of copies) {
   if (fs.existsSync(src)) {
@@ -17,7 +19,6 @@ for (const [src, dest] of copies) {
 }
 if (!fs.existsSync(indexPath)) process.exit(0);
 let t = fs.readFileSync(indexPath, "utf8");
-
 if (!t.includes("registerCommandsOnBoot") && t.includes('from "./dailyRoll.js"')) {
   t = t.replace(
     'import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";',
@@ -29,21 +30,17 @@ if (!t.includes("registerCommandsOnBoot") && t.includes('from "./dailyRoll.js"')
     "console.log(`👑 EDGE PLAY PICS online as ${c.user.tag}`);\n  await registerCommandsOnBoot();"
   );
 }
-
 if (!t.includes("valueBoardEmbed")) {
   t = t.replace(
     'import { lotdEmbed, liveCardEmbed, locksTodayEmbed } from "./lotdEmbed.js";',
     'import { lotdEmbed, liveCardEmbed, locksTodayEmbed, valueBoardEmbed, propsEmbed, parlaysEmbed } from "./lotdEmbed.js";'
   );
 }
-
 if (t.includes('name === "media"') && !t.includes('getString("platform")') && !t.includes('getString?.("platform")')) {
   t = t.replace(
     `await interaction.editReply({ embeds: [await mediaFollowEmbed()] });`,
     `const platform = interaction.options?.getString?.("platform") || null;\n      await interaction.editReply({ embeds: [await mediaFollowEmbed(platform)] });`
   );
-  console.log("Patched media platform option");
 }
-
 fs.writeFileSync(indexPath, t);
 console.log("patch-register done");
