@@ -8,14 +8,19 @@ function analysisBlock(r, why) {
   if (!r || typeof r !== "object") {
     return why ? `_${why}_` : "_Run `/daily` for full analysis._";
   }
-  return (
-    `**Form:** ${r.form || "—"}\n` +
-    `**Spot:** ${r.situational || r.serve || "—"}\n` +
-    `**Number:** ${r.number || "—"}\n` +
-    `**Media:** ${r.media || "Check /media — desk sizes units"}\n` +
-    `**Kill:** ${r.kill || "—"}\n` +
+  return [
+    `**Form:** ${r.form || "—"}`,
+    `**Spot:** ${r.situational || r.serve || "—"}`,
+    `**Number:** ${r.number || "—"}`,
+    `**Media:** ${r.media || "Check /media — desk sizes units"}`,
+    `**Facts:** ${r.facts || "Board data when available"}`,
+    `**Projection:** ${r.projection || "Process lean — not guaranteed"}`,
+    `**Missing:** ${r.missing || "Injuries / close may move"}`,
+    `**Both sides:** ${r.bothSides || "Wrong number = PASS"}`,
+    `**Confidence:** ${r.confidenceLine || r.confidence || "MEDIUM"}`,
+    `**Kill:** ${r.kill || "—"}`,
     `**Call:** ${r.decision || r.prediction || why || "—"}`
-  );
+  ].join("\n");
 }
 
 export function lotdEmbed() {
@@ -34,10 +39,15 @@ export function lotdEmbed() {
         `### Spot / Situation\n${a.situational || a.serve || "—"}\n\n` +
         `### Number\n${a.number || L.priceGuide || "—"}\n\n` +
         `### Media\n${a.media || "IG / X / TG = signal only. Desk sizes the bet — /media"}\n\n` +
+        `### Facts\n${a.facts || "Board data when available"}\n\n` +
+        `### Projection\n${a.projection || "Process lean — not guaranteed"}\n\n` +
+        `### Missing data\n${a.missing || "Injuries / closing line"}\n\n` +
+        `### Both sides\n${a.bothSides || "Wrong number = PASS"}\n\n` +
+        `### Confidence\n${a.confidenceLine || a.confidence || "MEDIUM"}\n\n` +
         `### What kills it\n${a.kill || "—"}\n\n` +
         `### Call\n**${a.prediction || a.decision || "—"}**`
     )
-    .setFooter({ text: `${L.date || ""} · EDGE PLAY · analysis · 21+` })
+    .setFooter({ text: `${L.date || ""} · EDGE PLAY · evidence-based · 21+` })
     .setTimestamp();
 }
 
