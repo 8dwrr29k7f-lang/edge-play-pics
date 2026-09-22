@@ -1,58 +1,33 @@
 import { EmbedBuilder } from "discord.js";
-import { lockOfTheDay, liveCard, premiumAlerts } from "./data/desk.js";
+import { lockOfTheDay, liveCard } from "./data/desk.js";
 import { config } from "./config.js";
+import {
+  standardizePick,
+  formatStandardDiscord,
+  formatParlayDiscord
+} from "./pickFormat.js";
 
 const { colors } = config;
 
-function analysisBlock(r, why) {
-  if (!r || typeof r !== "object") {
-    return why ? `_${why}_` : "_Run `/daily` for full analysis._";
-  }
-  return [
-    `**Form:** ${r.form || "—"}`,
-    `**Spot:** ${r.situational || r.serve || "—"}`,
-    `**Number:** ${r.number || "—"}`,
-    `**Supporting:** ${r.supporting || r.form || "—"}`,
-    `**Opposing:** ${r.opposing || r.bothSides || "—"}`,
-    `**Media:** ${r.media || "Signal only — /media"}`,
-    `**Facts:** ${r.facts || "Board data when available"}`,
-    `**Projection:** ${r.projection || "Process lean — not guaranteed"}`,
-    `**Sample:** ${r.sampleNote || "Weight recent form; small samples flagged"}`,
-    `**Missing:** ${r.missing || "Injuries / close may move"}`,
-    `**Stress fail:** ${r.stressFail || r.kill || "—"}`,
-    `**Confidence:** ${r.confidenceLine || r.confidence || "MEDIUM"}`,
-    `**Kill:** ${r.kill || "—"}`,
-    `**Call:** ${r.decision || r.prediction || why || "—"}`
-  ].join("\n");
-}
-
 export function lotdEmbed() {
   const L = lockOfTheDay || {};
-  const a = L.analysis || {};
+  const asPick = {
+    selection: (L.pick || "").replace(/^👑\s*LOCK OF THE DAY\s*·\s*/i, "").trim() || L.pick,
+    game: L.match || L.event,
+    sport: L.sport,
+    tier: "LOCK",
+    price: L.priceGuide,
+    units: L.units,
+    reasoning: L.analysis,
+    type: "ml"
+  };
+  const std = standardizePick(asPick, { lotd: true });
+  const body = formatStandardDiscord(std);
   return new EmbedBuilder()
     .setColor(0xf4d03f)
-    .setTitle("👑 LOCK OF THE DAY · FULL ANALYSIS")
-    .setDescription(
-      `**${L.pick || "Run /daily"}**\n` +
-        `${L.event || ""} · ${L.match || ""}\n` +
-        `**Market:** ${L.market || "—"}\n` +
-        `**Price:** ${L.priceGuide || "—"}\n` +
-        `**Size:** **${L.units ?? "—"}u** · **${L.tier || "LOCK OF THE DAY"}**\n\n` +
-        `### Form\n${a.form || "—"}\n\n` +
-        `### Spot\n${a.situational || a.serve || "—"}\n\n` +
-        `### Number\n${a.number || L.priceGuide || "—"}\n\n` +
-        `### Supporting\n${a.supporting || a.form || "—"}\n\n` +
-        `### Opposing\n${a.opposing || a.bothSides || "—"}\n\n` +
-        `### Media\n${a.media || "IG/X/TG signal only — /media"}\n\n` +
-        `### Facts\n${a.facts || "Board data when available"}\n\n` +
-        `### Projection\n${a.projection || "Process lean — not guaranteed"}\n\n` +
-        `### Sample\n${a.sampleNote || "Small samples flagged"}\n\n` +
-        `### Missing\n${a.missing || "Injuries / closing line"}\n\n` +
-        `### Stress fail\n${a.stressFail || a.kill || "—"}\n\n` +
-        `### Confidence\n${a.confidenceLine || a.confidence || "MEDIUM"}\n\n` +
-        `### Call\n**${a.prediction || a.decision || "—"}**`
-    )
-    .setFooter({ text: `${L.date || ""} · EDGE PLAY · evidence-based · facts ≠ projection · 21+` })
+    .setTitle("👑 LOCK OF THE DAY · STANDARD CARD")
+    .setDescription(body.slice(0, 4000))
+    .setFooter({ text: `${L.date || ""} · EDGE PLAY · facts ≠ guarantee · 21+` })
     .setTimestamp();
 }
 
@@ -60,97 +35,144 @@ export function liveCardEmbed() {
   const c = liveCard || { picks: [] };
   const e = new EmbedBuilder()
     .setColor(colors?.gold || 0xc4a35a)
-    .setTitle("📡 LIVE CARD · TAKES + ANALYSIS")
-    .setDescription(`**${c.dateLabel || "TODAY"}**\n✅ TAKE · 💎 VALUE · ➖ LEAN · ⏸️ HOLD · 🚫 PASS`)
-    .setFooter({ text: "EDGE PLAY · evidence-based · not guaranteed · 21+" })
+    .setTitle("📡 LIVE CARD · STANDARD TAKES")
+    .setDescription(`**${c.dateLabel || "TODAY"}**\nPICK · CONF · ODDS · EDGE · RISK · VERDICT`)
+    .setFooter({ text: "EDGE PLAY · standardized · not guaranteed · 21+" })
     .setTimestamp();
-  for (const p of (c.picks || []).slice(0, 10)) {
-    const take =
-      p.tier === "LOCK" || p.tier === "CAP"
-        ? `✅ **TAKE · LOCK** ${p.selection}`
-        : p.tier === "VALUE"
-          ? `💎 **VALUE · TAKE** ${p.selection}`
-          : p.tier === "LEAN"
-            ? `➖ **LEAN · TAKE** ${p.selection}`
-            : p.tier === "HOLD"
-              ? `⏸️ **HOLD** ${p.selection}`
-              : `🚫 **PASS**`;
+  const picks = (c.picks || []).filter((p) =>
+    ["LOCK", "CAP", "VALUE", "LEAN"].includes((p.tier || "").toUpperCase())
+  );
+  if (!picks.length) {
+    e.setDescription("🚫 NO PICK board yet.\nREASON: Run `/daily`. Never invent locks.");
+    return e;
+  }
+  for (const p of picks.slice(0, 8)) {
+    const std = standardizePick(p);
     e.addFields({
       name: `${p.tier} · ${p.sport}`.slice(0, 256),
-      value: (`${take}\n**${p.game}**\nPrice: ${p.price} · **${p.units}u**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
+      value: formatStandardDiscord(std, { compact: true }).slice(0, 1020),
       inline: false
     });
   }
-  if (!(c.picks || []).length) e.setDescription("No picks — run `/daily`.");
   return e;
 }
 
 export function locksTodayEmbed() {
-  const locks = (liveCard?.picks || []).filter((p) => p.tier === "LOCK" || p.tier === "CAP" || p.potd);
-  const leans = (liveCard?.picks || []).filter((p) => p.tier === "LEAN" || p.tier === "VALUE").slice(0, 6);
-  const e = new EmbedBuilder().setColor(0xf4d03f).setTitle("🔒 LOCKS · FULL ANALYSIS").setTimestamp().setFooter({ text: "EDGE PLAY · evidence-based · 21+" });
+  const e = new EmbedBuilder()
+    .setColor(0xf4d03f)
+    .setTitle("🔒 LOCKS · STANDARD CARDS")
+    .setTimestamp()
+    .setFooter({ text: "EDGE PLAY · clear FINAL PICK · 21+" });
   if (lockOfTheDay?.pick) {
-    const a = lockOfTheDay.analysis || {};
+    const asPick = {
+      selection: String(lockOfTheDay.pick).replace(/^👑\s*LOCK OF THE DAY\s*·\s*/i, "").trim(),
+      game: lockOfTheDay.match || lockOfTheDay.event,
+      sport: lockOfTheDay.sport,
+      tier: "LOCK",
+      price: lockOfTheDay.priceGuide,
+      units: lockOfTheDay.units,
+      reasoning: lockOfTheDay.analysis,
+      type: "ml"
+    };
+    const std = standardizePick(asPick, { lotd: true });
     e.addFields({
-      name: `👑 ${lockOfTheDay.tier || "LOCK OF THE DAY"}`,
-      value: (`✅ **${lockOfTheDay.pick}**\n${lockOfTheDay.match || ""}\n**Price:** ${lockOfTheDay.priceGuide} · **${lockOfTheDay.units}u**\n` + analysisBlock(a, lockOfTheDay.pick)).slice(0, 1020),
+      name: "👑 LOCK OF THE DAY",
+      value: formatStandardDiscord(std).slice(0, 1020),
       inline: false
     });
   }
-  for (const p of locks.slice(0, 5)) {
+  const locks = (liveCard?.picks || []).filter((p) => p.tier === "LOCK" || p.tier === "CAP" || p.potd);
+  const values = (liveCard?.picks || []).filter((p) => p.tier === "VALUE" || p.tier === "LEAN");
+  for (const p of locks.slice(0, 4)) {
+    const std = standardizePick(p);
     e.addFields({
       name: `🔒 ${p.sport} · ${p.selection}`.slice(0, 256),
-      value: (`✅ **TAKE** · ${p.price} · **${p.units}u**\n**${p.game}**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
+      value: formatStandardDiscord(std).slice(0, 1020),
       inline: false
     });
   }
-  for (const p of leans) {
+  for (const p of values.slice(0, 5)) {
+    const std = standardizePick(p);
     e.addFields({
-      name: `➖ ${p.tier} · ${p.sport}`.slice(0, 256),
-      value: (`**${p.selection}** · ${p.price} · **${p.units}u**\n**${p.game}**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
+      name: `${p.tier} · ${p.sport} · ${p.selection}`.slice(0, 256),
+      value: formatStandardDiscord(std, { compact: true }).slice(0, 1020),
       inline: false
     });
   }
-  if (!locks.length && !leans.length && !lockOfTheDay?.pick) e.setDescription("Run `/daily`.");
+  if (!lockOfTheDay?.pick && !locks.length && !values.length) {
+    e.setDescription("🚫 FINAL PICK: NO PICK\nREASON: Empty desk — run `/daily`.");
+  }
   return e;
 }
 
 export function valueBoardEmbed() {
   const values = (liveCard?.picks || []).filter((p) => p.tier === "VALUE");
-  const rows = liveCard?.valueBoard || [];
-  const e = new EmbedBuilder().setColor(0x3498db).setTitle("💎 VALUE · ANALYSIS").setFooter({ text: "VALUE · evidence-based · 21+" }).setTimestamp();
+  const e = new EmbedBuilder().setColor(0x3498db).setTitle("💎 VALUE · STANDARD CARDS").setFooter({ text: "VALUE · 21+" }).setTimestamp();
+  if (!values.length) {
+    e.setDescription("🚫 NO PICK — run `/daily`.");
+    return e;
+  }
   for (const p of values.slice(0, 6)) {
+    const std = standardizePick(p);
     e.addFields({
-      name: `💎 ${p.sport}`,
-      value: (`✅ **TAKE ${p.selection}**\n**${p.game}**\n${p.price} · **${p.units}u**\n` + analysisBlock(p.reasoning, p.why)).slice(0, 1020),
+      name: `💎 ${p.sport} · ${p.selection}`.slice(0, 256),
+      value: formatStandardDiscord(std, { compact: true }).slice(0, 1020),
       inline: false
     });
   }
-  for (const r of rows.slice(0, 4)) {
-    e.addFields({ name: `💎 ${r.sport}`, value: `**${r.pick}**\n${r.price} · **${r.units}u**\n_${r.why}_`, inline: false });
-  }
-  if (!values.length && !rows.length) e.setDescription("Run `/daily`.");
   return e;
 }
 
 export function propsEmbed() {
   const rows = liveCard?.playerPicks || [];
-  const e = new EmbedBuilder().setColor(0x9b59b6).setTitle("👤 PLAYER PROPS · ANALYSIS").setFooter({ text: "props · 21+" }).setTimestamp();
-  for (const x of rows) {
-    const icon = x.tier === "LOCK" || x.tier === "VALUE" ? "✅ TAKE" : x.tier === "LEAN" ? "➖ SMALL" : x.tier === "HOLD" ? "⏸️ HOLD" : "🚫 PASS";
-    e.addFields({ name: `${icon} · ${x.sport} · ${x.player}`, value: `**${x.market}** — ${x.side}\n**${x.tier}** · **${x.units}u**\n**Analysis:** ${x.note}`, inline: false });
+  const e = new EmbedBuilder().setColor(0x9b59b6).setTitle("👤 PLAYER PROPS").setFooter({ text: "props · 21+" }).setTimestamp();
+  if (!rows.length) {
+    e.setDescription("🚫 FINAL PICK: NO PICK\nREASON: No prop board with usage + number.");
+    return e;
   }
-  if (!rows.length) e.setDescription("No props — run `/daily`.");
+  for (const x of rows) {
+    const take =
+      x.tier === "LOCK" || x.tier === "VALUE"
+        ? `🏆 PICK: ${x.player} · ${x.market} · ${x.side}`
+        : x.tier === "LEAN"
+          ? `🏆 PICK (LEAN): ${x.player} · ${x.side}`
+          : `🚫 NO PICK · ${x.player}`;
+    e.addFields({
+      name: `${x.tier} · ${x.sport}`.slice(0, 256),
+      value: `${take}\n**${x.units}u** · ${x.note || "Need usage + number"}`.slice(0, 1020),
+      inline: false
+    });
+  }
   return e;
 }
 
 export function parlaysEmbed() {
   const rows = liveCard?.parlays || [];
-  const e = new EmbedBuilder().setColor(0xe67e22).setTitle("🔗 PARLAYS · ANALYSIS").setDescription("Max 2 legs LEAN+. Lotto = PASS.").setFooter({ text: "parlays · 21+" }).setTimestamp();
-  for (const p of rows) {
-    const icon = p.tier === "VALUE" || p.tier === "LEAN" ? "✅ BUILD" : p.tier === "HOLD" ? "⏸️ WAIT" : "🚫 SKIP";
-    e.addFields({ name: `${icon} · ${p.name}`, value: `Legs:\n${(p.legs || []).map((l) => `• ${l}`).join("\n")}\n**${p.tier}** · **${p.units}u**\n**Analysis:** ${p.note}`, inline: false });
+  const e = new EmbedBuilder()
+    .setColor(0xe67e22)
+    .setTitle("🔗 PARLAYS")
+    .setDescription("Each leg analyzed alone first. Combined probability compounds risk.")
+    .setFooter({ text: "parlays · 21+" })
+    .setTimestamp();
+  const legs = (liveCard?.picks || [])
+    .filter((p) => ["LEAN", "VALUE", "LOCK"].includes(p.tier) && !p.final)
+    .slice(0, 2);
+  if (legs.length >= 2) {
+    e.addFields({
+      name: "✅ PROCESS 2-LEG (desk)",
+      value: formatParlayDiscord(legs).slice(0, 1020),
+      inline: false
+    });
   }
-  if (!rows.length) e.setDescription("Use two LEANs from `/live` max.");
+  for (const p of rows) {
+    e.addFields({
+      name: `${p.name}`.slice(0, 256),
+      value: `Legs: ${(p.legs || []).join(" · ")}\n**${p.tier}** · ${p.units}u\n_${p.note}_`.slice(0, 1020),
+      inline: false
+    });
+  }
+  if (!legs.length && !rows.length) {
+    e.setDescription("🚫 NO PICK parlay — need two LEAN+ legs from `/live`.");
+  }
   return e;
 }
