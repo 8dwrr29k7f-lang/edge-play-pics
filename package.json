@@ -1,13 +1,15 @@
 {
   "name": "edge-play-pics",
   "version": "4.1.0",
-  "description": "EDGE PLAY PICS — Discord desk with live OpticOdds optional + static premium fallback",
+  "description": "EDGE PLAY PICS — Discord desk with daily auto card + live scan",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    "start:railway": "unzip -qo src.zip -d src 2>/dev/null; node src/index.js",
     "register": "node src/register-commands.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "prestart": "test -f src/index.js || unzip -qo src.zip -d src"
   },
   "engines": {
     "node": ">=18"

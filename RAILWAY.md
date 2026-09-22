@@ -1,9 +1,18 @@
-# Deploy EDGE PLAY PICS on Railway
+# Railway
 
-1. Connect this GitHub repo to Railway
-2. Variables: DISCORD_TOKEN, CLIENT_ID, GUILD_ID, PICS_CHANNEL_ID, SCAN_MINUTES=15, TZ=America/Chicago
-3. Start: node src/index.js
-4. Once: node src/register-commands.js (local or one-off)
-5. Test /status /lotd /daily in Discord
+1. New Project → Deploy from GitHub → `edge-play-pics`
+2. Variables:
+```
+DISCORD_TOKEN=
+CLIENT_ID=
+GUILD_ID=
+PICS_CHANNEL_ID=
+SCAN_MINUTES=15
+TZ=America/Chicago
+```
+3. Start: `unzip -qo src.zip -d src; node src/index.js`
+4. Logs should show: `EDGE PLAY PICS online`
+5. In Discord: `/status` `/daily` `/lotd`
 
-21+ · 1-800-GAMBLER
+Register commands once from any machine with Node + same env:
+`node src/register-commands.js`
