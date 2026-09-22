@@ -12,11 +12,14 @@ function analysisBlock(r, why) {
     `**Form:** ${r.form || "—"}`,
     `**Spot:** ${r.situational || r.serve || "—"}`,
     `**Number:** ${r.number || "—"}`,
-    `**Media:** ${r.media || "Check /media — desk sizes units"}`,
+    `**Supporting:** ${r.supporting || r.form || "—"}`,
+    `**Opposing:** ${r.opposing || r.bothSides || "—"}`,
+    `**Media:** ${r.media || "Signal only — /media"}`,
     `**Facts:** ${r.facts || "Board data when available"}`,
     `**Projection:** ${r.projection || "Process lean — not guaranteed"}`,
+    `**Sample:** ${r.sampleNote || "Weight recent form; small samples flagged"}`,
     `**Missing:** ${r.missing || "Injuries / close may move"}`,
-    `**Both sides:** ${r.bothSides || "Wrong number = PASS"}`,
+    `**Stress fail:** ${r.stressFail || r.kill || "—"}`,
     `**Confidence:** ${r.confidenceLine || r.confidence || "MEDIUM"}`,
     `**Kill:** ${r.kill || "—"}`,
     `**Call:** ${r.decision || r.prediction || why || "—"}`
@@ -36,18 +39,20 @@ export function lotdEmbed() {
         `**Price:** ${L.priceGuide || "—"}\n` +
         `**Size:** **${L.units ?? "—"}u** · **${L.tier || "LOCK OF THE DAY"}**\n\n` +
         `### Form\n${a.form || "—"}\n\n` +
-        `### Spot / Situation\n${a.situational || a.serve || "—"}\n\n` +
+        `### Spot\n${a.situational || a.serve || "—"}\n\n` +
         `### Number\n${a.number || L.priceGuide || "—"}\n\n` +
-        `### Media\n${a.media || "IG / X / TG = signal only. Desk sizes the bet — /media"}\n\n` +
+        `### Supporting\n${a.supporting || a.form || "—"}\n\n` +
+        `### Opposing\n${a.opposing || a.bothSides || "—"}\n\n` +
+        `### Media\n${a.media || "IG/X/TG signal only — /media"}\n\n` +
         `### Facts\n${a.facts || "Board data when available"}\n\n` +
         `### Projection\n${a.projection || "Process lean — not guaranteed"}\n\n` +
-        `### Missing data\n${a.missing || "Injuries / closing line"}\n\n` +
-        `### Both sides\n${a.bothSides || "Wrong number = PASS"}\n\n` +
+        `### Sample\n${a.sampleNote || "Small samples flagged"}\n\n` +
+        `### Missing\n${a.missing || "Injuries / closing line"}\n\n` +
+        `### Stress fail\n${a.stressFail || a.kill || "—"}\n\n` +
         `### Confidence\n${a.confidenceLine || a.confidence || "MEDIUM"}\n\n` +
-        `### What kills it\n${a.kill || "—"}\n\n` +
         `### Call\n**${a.prediction || a.decision || "—"}**`
     )
-    .setFooter({ text: `${L.date || ""} · EDGE PLAY · evidence-based · 21+` })
+    .setFooter({ text: `${L.date || ""} · EDGE PLAY · evidence-based · facts ≠ projection · 21+` })
     .setTimestamp();
 }
 
@@ -57,7 +62,7 @@ export function liveCardEmbed() {
     .setColor(colors?.gold || 0xc4a35a)
     .setTitle("📡 LIVE CARD · TAKES + ANALYSIS")
     .setDescription(`**${c.dateLabel || "TODAY"}**\n✅ TAKE · 💎 VALUE · ➖ LEAN · ⏸️ HOLD · 🚫 PASS`)
-    .setFooter({ text: "EDGE PLAY · full analysis · 21+" })
+    .setFooter({ text: "EDGE PLAY · evidence-based · not guaranteed · 21+" })
     .setTimestamp();
   for (const p of (c.picks || []).slice(0, 10)) {
     const take =
@@ -83,7 +88,7 @@ export function liveCardEmbed() {
 export function locksTodayEmbed() {
   const locks = (liveCard?.picks || []).filter((p) => p.tier === "LOCK" || p.tier === "CAP" || p.potd);
   const leans = (liveCard?.picks || []).filter((p) => p.tier === "LEAN" || p.tier === "VALUE").slice(0, 6);
-  const e = new EmbedBuilder().setColor(0xf4d03f).setTitle("🔒 LOCKS · FULL ANALYSIS").setTimestamp().setFooter({ text: "EDGE PLAY · analysis · 21+" });
+  const e = new EmbedBuilder().setColor(0xf4d03f).setTitle("🔒 LOCKS · FULL ANALYSIS").setTimestamp().setFooter({ text: "EDGE PLAY · evidence-based · 21+" });
   if (lockOfTheDay?.pick) {
     const a = lockOfTheDay.analysis || {};
     e.addFields({
@@ -106,14 +111,14 @@ export function locksTodayEmbed() {
       inline: false
     });
   }
-  if (!locks.length && !leans.length && !lockOfTheDay?.pick) e.setDescription("Run `/daily` — forces LOCK OF THE DAY + analysis.");
+  if (!locks.length && !leans.length && !lockOfTheDay?.pick) e.setDescription("Run `/daily`.");
   return e;
 }
 
 export function valueBoardEmbed() {
   const values = (liveCard?.picks || []).filter((p) => p.tier === "VALUE");
   const rows = liveCard?.valueBoard || [];
-  const e = new EmbedBuilder().setColor(0x3498db).setTitle("💎 VALUE · ANALYSIS").setFooter({ text: "VALUE 0.35–0.5u · 21+" }).setTimestamp();
+  const e = new EmbedBuilder().setColor(0x3498db).setTitle("💎 VALUE · ANALYSIS").setFooter({ text: "VALUE · evidence-based · 21+" }).setTimestamp();
   for (const p of values.slice(0, 6)) {
     e.addFields({
       name: `💎 ${p.sport}`,
@@ -124,7 +129,7 @@ export function valueBoardEmbed() {
   for (const r of rows.slice(0, 4)) {
     e.addFields({ name: `💎 ${r.sport}`, value: `**${r.pick}**\n${r.price} · **${r.units}u**\n_${r.why}_`, inline: false });
   }
-  if (!values.length && !rows.length) e.setDescription("Run `/daily` for VALUE + analysis.");
+  if (!values.length && !rows.length) e.setDescription("Run `/daily`.");
   return e;
 }
 
