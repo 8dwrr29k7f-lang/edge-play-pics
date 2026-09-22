@@ -1,6 +1,5 @@
 /**
- * EDGE PLAY PICS — live card + process desks
- * Updated: 2026-09-14 — real named picks (not empty templates only)
+ * EDGE PLAY PICS — desk data (minimal working shape)
  */
 
 export const limitsText = [
@@ -9,86 +8,79 @@ export const limitsText = [
   "Day risk ≤ 5u",
   "SIT if cents ≥ 0.72",
   "LOCK max -150 American / 0.65 cents"
-];
+].join("\n");
 
-export const premiumAlerts = [
-  { id: "pa1", title: "Cash-out watch", body: "Live hedges when edge compresses" },
-  { id: "pa2", title: "Line move", body: "Steam / reverse line move flags" }
-];
+export const premiumAlerts = [];
 
 export const lockOfTheDay = {
   sport: "NFL",
   selection: "PHI ML",
   odds: -120,
   units: 1,
-  why: "Named desk lock — market still soft"
+  why: "Named desk lock"
 };
 
 export const liveCard = {
   dateLabel: "Today",
-  picks: []
+  picks: [],
+  leanBoard: [],
+  holdBoard: [],
+  mediaFollow: []
 };
 
+function cat(label, emoji, pick, odds, why) {
+  return {
+    label,
+    emoji,
+    kalshi: "—",
+    mediaOverall: "—",
+    best: {
+      title: "BEST",
+      pick,
+      selection: pick,
+      odds: String(odds),
+      size: "0.5–1u",
+      why
+    },
+    locks: [],
+    leans: [],
+    holds: [],
+    pass: [],
+    mediaBets: []
+  };
+}
+
 export const categories = {
-  mlb: {
-    label: "MLB",
-    best: { selection: "NYY ML", odds: -110, why: "Named desk lean" },
-    locks: [],
-    leans: [],
-    holds: []
-  },
-  nfl: {
-    label: "NFL",
-    best: { selection: "PHI ML", odds: -120, why: "Named desk lock" },
-    locks: [],
-    leans: [],
-    holds: []
-  },
-  nba: {
-    label: "NBA",
-    best: { selection: "BOS ML", odds: -130, why: "Named desk lean" },
-    locks: [],
-    leans: [],
-    holds: []
-  },
-  nhl: {
-    label: "NHL",
-    best: { selection: "COL ML", odds: -115, why: "Named desk lean" },
-    locks: [],
-    leans: [],
-    holds: []
-  },
-  ncaaf: {
-    label: "NCAAF",
-    best: { selection: "UGA ML", odds: -200, why: "Named desk lean" },
-    locks: [],
-    leans: [],
-    holds: []
-  },
-  kbo: {
-    label: "KBO",
-    best: { selection: "LG ML", odds: -105, why: "Named desk lean" },
-    locks: [],
-    leans: [],
-    holds: []
-  },
-  kalshi: {
-    label: "Kalshi",
-    best: { selection: "—", odds: 0, why: "All categories" },
-    locks: [],
-    leans: [],
-    holds: []
-  }
+  mlb: cat("MLB", "⚾", "NYY ML", -110, "Named desk lean"),
+  nfl: cat("NFL", "🏈", "PHI ML", -120, "Named desk lock"),
+  nba: cat("NBA", "🏀", "BOS ML", -130, "Named desk lean"),
+  nhl: cat("NHL", "🏒", "COL ML", -115, "Named desk lean"),
+  ncaaf: cat("NCAAF", "🏈", "UGA ML", -200, "Named desk lean"),
+  kbo: cat("KBO", "🌅", "LG ML", -105, "Named desk lean"),
+  kalshi: cat("Kalshi", "📡", "—", 0, "All categories"),
+  tennis: cat("Tennis", "🎾", "—", 0, "Pass")
 };
 
 export const wireBoard = {
-  dateLabel: "Wire",
+  title: "⚡ WIRE",
   description: "Live wire board",
-  picks: []
+  takes: [],
+  mediaLocks: []
 };
 
 export const kboBoard = {
   dateLabel: categories.kbo.label,
   description: categories.kbo.best.why,
-  picks: []
+  rows: [],
+  pitchers: [],
+  media: [],
+  mediaLocks: [],
+  footer: "KBO desk"
+};
+
+export const tennisBoard = {
+  title: "🎾 TENNIS",
+  description: "No strong edges",
+  takes: [],
+  mediaLocks: []
 };
