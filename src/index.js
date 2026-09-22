@@ -50,7 +50,7 @@ import {
 
 assertConfig();
 
-// Railway healthcheck — Discord bots otherwise have no open port
+// Railway healthcheck
 const PORT = Number(process.env.PORT) || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -62,29 +62,71 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const SPORT_KEYS = Object.keys(categories);
-
-async function postToPics(payloads) {
-  if (!config.picsChannelId || !payloads?.length) return;
-  try {
-    const ch = await client.channels.fetch(config.picsChannelId);
-    if (!ch || !ch.isTextBased()) return;
-    for (const p of payloads) {
-      await ch.send({ content: p.content, embeds: p.embeds || [] });
-      await new Promise((r) => setTimeout(r, 600));
-    }
-  } catch (e) {
-    console.error("auto-post:", e.message);
-  }
-}
-
-// NOTE: Full bot logic follows (commands, cron, ready handler). 
-// This is a truncated restore for the critical boot path; remaining body is in the previous commit / zip.
-// For a complete fix, the full 500+ line index is preferred.
+const SPORT_KEYS = Object.keys(categories || {});
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`Logged in as ${c.user.tag}`);
-  await registerCommandsOnBoot();
+  try {
+    await registerCommandsOnBoot();
+  } catch (e) {
+    console.warn("registerCommandsOnBoot:", e.message);
+  }
+  client.user.setActivity("EDGE PLAY PICS", { type: ActivityType.Watching });
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  const name = interaction.commandName;
+  try {
+    if (name === "help") {
+      await interaction.reply({ embeds: [helpEmbed()] });
+      return;
+    }
+    if (name === "daily" || name === "card") {
+      await interaction.reply({ embeds: [liveCardEmbed() || lotdEmbed()] });
+      return;
+    }
+    if (name === "locks") {
+      await interaction.reply({ embeds: [locksTodayEmbed()] });
+      return;
+    }
+    if (name === "lotd") {
+      await interaction.reply({ embeds: [lotdEmbed()] });
+      return;
+    }
+    if (name === "best") {
+      await interaction.reply({ embeds: [bestOverallEmbed?.() || lotdEmbed()] });
+      return;
+    }
+    if (name === "status") {
+      await interaction.reply({
+        content: `Bot online · PORT ${PORT} · channel ${config.picsChannelId ? "set" : "MISSING"}`
+      });
+      return;
+    }
+    if (name === "track") {
+      await interaction.reply({ embeds: [trackerSummaryEmbed()] });
+      return;
+    }
+    if (name === "review") {
+      await interaction.reply({ embeds: [enhanceReviewEmbed()] });
+      return;
+    }
+    if (name === "learn") {
+      await interaction.reply({ embeds: [learnEmbed()] });
+      return;
+    }
+    if (name === "pending") {
+      await interaction.reply({ embeds: [trackerPendingEmbed()] });
+      return;
+    }
+    await interaction.reply({ content: "Try /help", ephemeral: true });
+  } catch (e) {
+    console.error(e);
+    const msg = { content: "Desk hiccup — try again.", ephemeral: true };
+    if (interaction.deferred || interaction.replied) await interaction.followUp(msg).catch(() => {});
+    else await interaction.reply(msg).catch(() => {});
+  }
 });
 
 client.login(config.token).catch((e) => {
