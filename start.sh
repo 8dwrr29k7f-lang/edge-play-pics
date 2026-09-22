@@ -3,19 +3,34 @@ set -e
 echo "EDGE PLAY PICS starting..."
 echo "Env: TOKEN=${DISCORD_TOKEN:+set} CLIENT=${CLIENT_ID:+set} GUILD=${GUILD_ID:+set} PICS=${PICS_CHANNEL_ID:+set} PORT=${PORT:-auto}"
 
-if [ ! -f src/index.js ]; then
-  echo "FATAL: src/index.js missing"
-  ls -la . src 2>/dev/null || true
-  exit 1
+# Recover full source if desk.js is missing (previous bad src.zip commits)
+if [ ! -f src/data/desk.js ] || [ ! -f src/announce.js ]; then
+  echo "Incomplete src/ — recovering full source from known-good commit..."
+  mkdir -p src
+  # Known good zip from before corruption (commit 730616d...)
+  GOOD_ZIP_URL="https://raw.githubusercontent.com/8dwrr29k7f-lang/edge-play-pics/730616d193a937853c3f012eb6dea098b257d4f3/src.zip"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$GOOD_ZIP_URL" -o /tmp/good-src.zip && unzip -qo /tmp/good-src.zip -d src && echo "Recovered via curl"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO /tmp/good-src.zip "$GOOD_ZIP_URL" && unzip -qo /tmp/good-src.zip -d src && echo "Recovered via wget"
+  else
+    echo "No curl/wget — trying python download"
+    python3 -c "
+import urllib.request, zipfile, os
+urllib.request.urlretrieve('$GOOD_ZIP_URL', '/tmp/good-src.zip')
+with zipfile.ZipFile('/tmp/good-src.zip') as z: z.extractall('src')
+print('Recovered via python')
+" || true
+  fi
 fi
 
-if [ ! -f src/data/desk.js ]; then
-  echo "FATAL: src/data/desk.js missing — incomplete source tree"
+if [ ! -f src/index.js ] || [ ! -f src/data/desk.js ]; then
+  echo "FATAL: still missing src/index.js or src/data/desk.js after recovery"
   ls -la src src/data 2>/dev/null || true
   exit 1
 fi
 
-# Optional overlays (safe if already applied in repo)
+# Apply overlays so named picks + desk locks win
 [ -f overlay_config.js ] && cp -f overlay_config.js src/config.js && echo "Overlay: config"
 [ -f overlay_pickFormat.js ] && cp -f overlay_pickFormat.js src/pickFormat.js && echo "Overlay: pickFormat"
 [ -f overlay_lotdEmbed.js ] && cp -f overlay_lotdEmbed.js src/lotdEmbed.js && echo "Overlay: lotdEmbed"
@@ -23,8 +38,14 @@ fi
 [ -f overlay_analyticsEngine.js ] && cp -f overlay_analyticsEngine.js src/analyticsEngine.js && echo "Overlay: analytics"
 [ -f overlay_categoryEmbed.js ] && cp -f overlay_categoryEmbed.js src/categoryEmbed.js && echo "Overlay: category"
 [ -f overlay_mediaFollow.js ] && cp -f overlay_mediaFollow.js src/mediaFollow.js && echo "Overlay: mediaFollow"
+[ -f registerOnBoot.js ] && cp -f registerOnBoot.js src/registerOnBoot.js && echo "Overlay: registerOnBoot"
 
-# Ensure health listener exists (Railway needs something on $PORT)
+# Runtime patches for named picks / desk locks
+node overlay_takes_patch.mjs 2>/dev/null || echo "WARN: takes patch"
+node overlay_names_patch.mjs 2>/dev/null || echo "WARN: names patch"
+node patch-register.mjs 2>/dev/null || echo "WARN: register patch"
+
+# Inject health listener if missing (Railway needs $PORT)
 if ! grep -q "Health listener" src/index.js 2>/dev/null; then
   echo "Injecting Railway health listener..."
   node --input-type=module -e '
