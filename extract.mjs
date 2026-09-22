@@ -1,16 +1,14 @@
-/** Unpack src.zip → src/ using adm-zip (available after npm install) */
+/** Always unpack src.zip → src/ so Railway gets latest desk code */
 import fs from "fs";
 import path from "path";
 import { createRequire } from "module";
 
-const indexPath = path.join("src", "index.js");
-if (fs.existsSync(indexPath)) {
-  console.log("src/index.js already present — skip unpack");
-  process.exit(0);
-}
-
 if (!fs.existsSync("src.zip")) {
-  console.error("FATAL: no src/index.js and no src.zip");
+  if (fs.existsSync(path.join("src", "index.js"))) {
+    console.log("No src.zip — using existing src/");
+    process.exit(0);
+  }
+  console.error("FATAL: no src.zip and no src/index.js");
   process.exit(1);
 }
 
@@ -19,7 +17,7 @@ let AdmZip;
 try {
   AdmZip = require("adm-zip");
 } catch {
-  console.error("FATAL: adm-zip not installed. Run npm install.");
+  console.error("FATAL: adm-zip missing — npm install failed?");
   process.exit(1);
 }
 
@@ -28,11 +26,15 @@ fs.mkdirSync("src", { recursive: true });
 const zip = new AdmZip("src.zip");
 zip.extractAllTo("src", true);
 
+const indexPath = path.join("src", "index.js");
 if (!fs.existsSync(indexPath)) {
-  console.error("FATAL: src/index.js still missing after unpack");
+  console.error("FATAL: src/index.js missing after unpack");
   try {
     console.error(fs.readdirSync("src").join(", "));
   } catch {}
   process.exit(1);
 }
-console.log("Unpack OK");
+console.log(
+  "Unpack OK — modules:",
+  fs.readdirSync("src").filter((f) => f.endsWith(".js")).length
+);
