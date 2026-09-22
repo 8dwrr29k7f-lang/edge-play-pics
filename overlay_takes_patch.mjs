@@ -1,94 +1,17 @@
-/** Force daily LOCK OF THE DAY from media + stats ranking */
+/** Force daily LOCK + force /locks /best to desk (not OpticOdds-only) */
 import fs from "fs";
 import path from "path";
 
 const f = path.join("src", "dailyRoll.js");
-if (!fs.existsSync(f)) {
-  console.log("no dailyRoll");
-  process.exit(0);
-}
-let t = fs.readFileSync(f, "utf8");
-
-const FORCE_FN = `
-function forcePromoteFromMediaStats(picks) {
-  if (!picks?.length) return picks;
-  const mediaBias = {
-    NFL: "Media/TV sides often taxed — shop soft process side",
-    MLB: "Ace narratives tax past 65¢ — VALUE 40–65¢ SP only",
-    NBA: "Star props need lineup; lean rest edge",
-    TENNIS: "IG/TG spam — need form+serve",
-    SOCCER: "Badge chalk PASS 1.15–1.30"
-  };
-  const score = (p) => {
-    let s = 0;
-    if (p.potd) s += 50;
-    if (p.tier === "LOCK") s += 40;
-    if (p.tier === "VALUE") s += 30;
-    if (p.tier === "LEAN") s += 20;
-    if (p.sport === "NFL") s += 8;
-    if (p.sport === "MLB") s += 6;
-    if (p.units > 0) s += 5;
-    if (p.final) s -= 100;
-    if (/Wait next|Empty board|No NFL|No MLB/i.test(p.game || "")) s -= 50;
-    return s;
-  };
-  const ranked = [...picks].sort((a, b) => score(b) - score(a));
-  const top = ranked.find((p) => score(p) > 0) || ranked[0];
-  if (!top) return picks;
-  top.tier = "LOCK";
-  top.potd = true;
-  top.units = Math.max(top.units || 0.25, 0.5);
-  top.why = "🔒 LOCK OF THE DAY · ✅ TAKE " + top.selection + " · media+stats rank";
-  top.reasoning = top.reasoning || {};
-  top.reasoning.media = mediaBias[top.sport] || "See /media — desk sizes units";
-  top.reasoning.decision = "🔒 ✅ TAKE " + top.selection + " · " + top.units + "u · " + top.price;
-  top.reasoning.form = top.reasoning.form || "Ranked #1 on daily slate (ESPN + media maps).";
-  top.reasoning.kill = top.reasoning.kill || "Injury · line move · media steam without price";
-  for (const p of ranked.slice(1, 4)) {
-    if (p.final || score(p) < 10) continue;
-    if (p.tier === "HOLD" || p.tier === "PASS") {
-      p.tier = "VALUE";
-      p.units = Math.max(p.units || 0, 0.35);
-      p.why = "💎 VALUE · ✅ TAKE " + p.selection + " if price hits";
-      p.reasoning = p.reasoning || {};
-      p.reasoning.decision = "💎 ✅ TAKE " + p.selection + " · " + p.units + "u";
-      p.reasoning.media = mediaBias[p.sport] || "Cross-check /media";
-    }
-  }
-  return picks;
-}
-`;
-
-if (!t.includes("forcePromoteFromMediaStats")) {
-  const anchor = t.indexOf("function processPickFromGame");
-  if (anchor > 0) {
-    t = t.slice(0, anchor) + FORCE_FN + "\n" + t.slice(anchor);
-    console.log("Inserted forcePromoteFromMediaStats");
-  }
-}
-
-if (t.includes("const picks = games.map(processPickFromGame)") && !t.includes("let picks = games.map")) {
-  t = t.replace(
-    "const picks = games.map(processPickFromGame);",
-    "let picks = games.map(processPickFromGame);\n  picks = forcePromoteFromMediaStats(picks);"
-  );
-  console.log("Force call after map");
-}
-if (t.includes("const lockOfDay = buildDefaultLotd") && !t.includes("forcePromoteFromMediaStats(picks);\n  const lockOfDay")) {
-  t = t.replace(
-    "const lockOfDay = buildDefaultLotd(key, picks);",
-    "picks = forcePromoteFromMediaStats(picks);\n  const lockOfDay = buildDefaultLotd(key, picks);"
-  );
-  console.log("Force call before LOTD");
-}
-
-if (!t.includes("LOCK OF THE DAY · ")) {
-  const start = t.indexOf("function buildDefaultLotd");
-  const end = t.indexOf("\nfunction applyToDesk", start);
-  if (start >= 0 && end > start) {
-    t =
-      t.slice(0, start) +
-      `function buildDefaultLotd(key, picks) {
+if (fs.existsSync(f)) {
+  let t = fs.readFileSync(f, "utf8");
+  if (!t.includes("LOCK OF THE DAY · ") && t.includes("function buildDefaultLotd")) {
+    const start = t.indexOf("function buildDefaultLotd");
+    const end = t.indexOf("\nfunction applyToDesk", start);
+    if (start >= 0 && end > start) {
+      t =
+        t.slice(0, start) +
+        `function buildDefaultLotd(key, picks) {
   const ranked =
     picks.find((p) => p.potd && !p.final) ||
     picks.find((p) => p.tier === "LOCK" && !p.final) ||
@@ -106,13 +29,10 @@ if (!t.includes("LOCK OF THE DAY · ")) {
   }
   const r = ranked.reasoning || {};
   return {
-    date: key,
-    sport: ranked.sport,
-    event: ranked.sport + " · media+stats desk",
+    date: key, sport: ranked.sport, event: ranked.sport + " · desk",
     match: ranked.game,
     pick: "👑 LOCK OF THE DAY · " + ranked.selection,
-    market: ranked.type || "ml",
-    priceGuide: ranked.price,
+    market: ranked.type || "ml", priceGuide: ranked.price,
     units: Math.max(ranked.units || 0.5, 0.5),
     tier: "LOCK OF THE DAY",
     analysis: {
@@ -120,18 +40,53 @@ if (!t.includes("LOCK OF THE DAY · ")) {
       serve: r.number || ranked.price,
       situational: r.situational || ranked.game,
       kill: r.kill || "Injury · bad number",
-      prediction: r.decision || ("✅ TAKE " + ranked.selection),
-      media: r.media || "Media via /media — desk sizes the bet"
+      prediction: r.decision || ("✅ TAKE " + ranked.selection)
     },
     kalshi: "https://kalshi.com"
   };
 }
 
 ` +
-      t.slice(end);
-    console.log("Patched buildDefaultLotd");
+        t.slice(end);
+      fs.writeFileSync(f, t);
+      console.log("Patched buildDefaultLotd");
+    }
   }
 }
 
-fs.writeFileSync(f, t);
-console.log("overlay_takes_patch done — daily LOCK forced");
+const idxPath = path.join("src", "index.js");
+if (fs.existsSync(idxPath)) {
+  let ix = fs.readFileSync(idxPath, "utf8");
+  let changed = false;
+  if (ix.includes('name === "locks"')) {
+    const re = /if \(name === "locks"\) \{[\s\S]*?return;\n    \}/;
+    const rep = `if (name === "locks") {
+      await interaction.deferReply();
+      try { await ensureTodayCard(); } catch {}
+      await interaction.editReply({ embeds: [locksTodayEmbed()] });
+      return;
+    }`;
+    if (re.test(ix)) {
+      ix = ix.replace(re, rep);
+      changed = true;
+      console.log("Forced /locks → desk locksTodayEmbed");
+    }
+  }
+  if (ix.includes('name === "best"')) {
+    const re = /if \(name === "best"\) \{[\s\S]*?return;\n    \}/;
+    const rep = `if (name === "best") {
+      await interaction.deferReply();
+      try { await ensureTodayCard(); } catch {}
+      await interaction.editReply({ embeds: [lotdEmbed(), locksTodayEmbed()] });
+      return;
+    }`;
+    if (re.test(ix)) {
+      ix = ix.replace(re, rep);
+      changed = true;
+      console.log("Forced /best → lotd + desk locks");
+    }
+  }
+  if (changed) fs.writeFileSync(idxPath, ix);
+}
+
+console.log("overlay_takes_patch done — desk locks forced");
