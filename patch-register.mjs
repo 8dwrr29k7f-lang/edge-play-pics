@@ -1,14 +1,18 @@
-/** Patch unpacked bot: auto-register commands + ensure /lotd /live /lock handlers */
+/** Hotfix after unpack: commands + /lotd /live /locks with analysis */
 import fs from "fs";
 import path from "path";
 
 const indexPath = path.join("src", "index.js");
-const bootSrc = "registerOnBoot.js";
-const bootDest = path.join("src", "registerOnBoot.js");
 
-if (fs.existsSync(bootSrc)) {
-  fs.copyFileSync(bootSrc, bootDest);
-  console.log("Copied registerOnBoot.js into src/");
+const copies = [
+  ["registerOnBoot.js", path.join("src", "registerOnBoot.js")],
+  ["overlay_lotdEmbed.js", path.join("src", "lotdEmbed.js")]
+];
+for (const [src, dest] of copies) {
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, dest);
+    console.log("Overlay:", src, "→", dest);
+  }
 }
 
 if (!fs.existsSync(indexPath)) {
@@ -18,7 +22,6 @@ if (!fs.existsSync(indexPath)) {
 
 let t = fs.readFileSync(indexPath, "utf8");
 
-// 1) Auto-register on boot
 if (!t.includes("registerCommandsOnBoot")) {
   if (t.includes('from "./dailyRoll.js"')) {
     t = t.replace(
@@ -37,7 +40,6 @@ if (!t.includes("registerCommandsOnBoot")) {
   console.log("Patched auto-register");
 }
 
-// 2) Ensure /lotd /lock /live /hedge handlers exist
 if (!t.includes('name === "lotd"')) {
   const needle = `if (name === "hold") {
       await interaction.reply({ embeds: [holdEmbed()] });
@@ -48,7 +50,9 @@ if (!t.includes('name === "lotd"')) {
       return;
     }
     if (name === "lotd" || name === "lock") {
-      await interaction.reply({ embeds: [lotdEmbed()] });
+      await interaction.deferReply();
+      try { await ensureTodayCard(); } catch {}
+      await interaction.editReply({ embeds: [lotdEmbed(), locksTodayEmbed()] });
       return;
     }
     if (name === "live") {
@@ -61,12 +65,26 @@ if (!t.includes('name === "lotd"')) {
     }`;
   if (t.includes(needle)) {
     t = t.replace(needle, insert);
-    console.log("Patched /lotd /live /lock /hedge handlers");
-  } else {
-    console.warn("Could not find hold handler to patch lotd");
+    console.log("Patched /lotd /live handlers");
   }
-} else {
-  console.log("/lotd handler already present");
+}
+
+if (t.includes("liveLocksEmbed()") && t.includes('name === "locks"') && !t.includes("locksTodayEmbed()")) {
+  t = t.replace(
+    `if (name === "locks") {
+      await interaction.deferReply();
+      await interaction.editReply({ embeds: [await liveLocksEmbed()] });
+      return;
+    }`,
+    `if (name === "locks") {
+      await interaction.deferReply();
+      const embeds = [locksTodayEmbed()];
+      try { const live = await liveLocksEmbed(); if (live) embeds.push(live); } catch {}
+      await interaction.editReply({ embeds });
+      return;
+    }`
+  );
+  console.log("Patched /locks analysis board");
 }
 
 fs.writeFileSync(indexPath, t);
