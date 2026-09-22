@@ -10,7 +10,8 @@ const copies = [
   ["overlay_dailyRoll.js", path.join("src", "dailyRoll.js")],
   ["overlay_categoryEmbed.js", path.join("src", "categoryEmbed.js")],
   ["overlay_analyticsEngine.js", path.join("src", "analyticsEngine.js")],
-  ["overlay_liveEmbeds.js", path.join("src", "liveEmbeds.js")]
+  ["overlay_liveEmbeds.js", path.join("src", "liveEmbeds.js")],
+  ["overlay_pickFormat.js", path.join("src", "pickFormat.js")]
 ];
 for (const [src, dest] of copies) {
   if (fs.existsSync(src)) {
