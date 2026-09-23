@@ -1,12 +1,9 @@
 /**
- * EDGE PLAY — Evidence-based multi-factor AI decision engine (v8)
+ * EDGE PLAY — Evidence-based multi-factor decision engine (v9)
  *
- * CORE RULE: NEVER force a lock.
- * Outcomes: 🟢 STRONG PLAY | 🟡 LEAN | 🔴 NO PLAY
- *
- * See overlay_analyticsEngine.js — this file is the runtime source of truth.
- * Full engine content is maintained in repo root overlay and copied at boot.
- * Minimal working exports so imports never break even without start.sh.
+ * POLICY: Always return a playable side when a named selection exists.
+ * LOCK only when strict thresholds pass; otherwise LEAN (possibly forced).
+ * NO PLAY is reserved only for missing/invalid selection identity.
  */
 
 function safeNum(v, fallback = null) {
@@ -61,7 +58,22 @@ const RED_FLAG_PATTERNS = [
 ];
 
 function detectRedFlags(ctx = {}) {
-  const blob = [ctx.form, ctx.situational, ctx.sampleNote, ctx.missing, ctx.opposing, ctx.bothSides, ctx.kill, ctx.stressFail, ctx.facts, ctx.notes, ctx.game, ctx.selection].filter(Boolean).join(" | ");
+  const blob = [
+    ctx.form,
+    ctx.situational,
+    ctx.sampleNote,
+    ctx.missing,
+    ctx.opposing,
+    ctx.bothSides,
+    ctx.kill,
+    ctx.stressFail,
+    ctx.facts,
+    ctx.notes,
+    ctx.game,
+    ctx.selection
+  ]
+    .filter(Boolean)
+    .join(" | ");
   const flags = [];
   for (const { re, flag } of RED_FLAG_PATTERNS) {
     if (re.test(blob)) flags.push(flag);
@@ -80,13 +92,26 @@ export function runMarketIntelligence(ctx = {}, modelProb = null) {
   const hasCurrent = currentParsed.implied != null;
   const hasAnyMarket = hasOpen || hasCurrent;
   const implied = hasCurrent ? currentParsed.implied : hasOpen ? openParsed.implied : null;
-  const oddsDisplay = hasCurrent ? currentParsed.oddsDisplay : hasOpen ? openParsed.oddsDisplay : "—";
+  const oddsDisplay = hasCurrent
+    ? currentParsed.oddsDisplay
+    : hasOpen
+      ? openParsed.oddsDisplay
+      : "—";
   let edge = null;
   if (modelProb != null && implied != null) edge = Math.round((modelProb - implied) * 1000) / 10;
   let interpretation = !hasAnyMarket
-    ? "Market information unavailable — no opening line, current price, or public data supplied. Model stands alone."
+    ? "Market information unavailable — model stands alone."
     : "Current price observed; limited movement/public context.";
-  let valueAssessment = edge == null ? "Cannot assess price value without odds." : edge >= 3 ? "Meaningful value (edge +" + edge + "% vs model)." : edge >= 1 ? "Modest value (edge +" + edge + "% )." : edge > -1 ? "Roughly efficient." : "Unfavorable vs model.";
+  let valueAssessment =
+    edge == null
+      ? "Cannot assess price value without odds."
+      : edge >= 3
+        ? "Meaningful value (edge +" + edge + "% vs model)."
+        : edge >= 1
+          ? "Modest value (edge +" + edge + "% )."
+          : edge > -1
+            ? "Roughly efficient."
+            : "Unfavorable vs model.";
   const signalBlock = [
     "📈 MARKET SIGNAL",
     "• Opening: " + (hasOpen ? openParsed.oddsDisplay : "unavailable"),
@@ -122,7 +147,7 @@ export function runWhatIfScenarios(preliminary, ctx = {}) {
       ran: true,
       newProb: Math.round(newProb * 1000) / 10,
       directionHeld: (baseProb >= 0.5 && newProb >= 0.5) || (baseProb < 0.5 && newProb < 0.5),
-      stillPlayable: newProb >= 0.52
+      stillPlayable: newProb >= 0.5
     });
   }
   shock("Key player limited", -0.05);
@@ -134,8 +159,21 @@ export function runWhatIfScenarios(preliminary, ctx = {}) {
   return {
     classification,
     scenarios,
-    note: classification === "FRAGILE" ? "Pick fails under multiple adverse scenarios." : classification === "SENSITIVE" ? "Pick direction can flip under stress." : "Pick holds under standard stress tests.",
-    block: "🔬 WHAT-IF: " + classification + " — " + (classification === "FRAGILE" ? "Fails stress" : classification === "SENSITIVE" ? "Sensitive to key assumptions" : "Holds under stress")
+    note:
+      classification === "FRAGILE"
+        ? "Pick is fragile under stress — still published as LEAN if forced."
+        : classification === "SENSITIVE"
+          ? "Pick direction can flip under stress."
+          : "Pick holds under standard stress tests.",
+    block:
+      "🔬 WHAT-IF: " +
+      classification +
+      " — " +
+      (classification === "FRAGILE"
+        ? "Fragile under stress"
+        : classification === "SENSITIVE"
+          ? "Sensitive to key assumptions"
+          : "Holds under stress")
   };
 }
 
@@ -143,21 +181,24 @@ export function runPredictionAutopsy(preliminary, ctx = {}) {
   const challenges = [];
   const redFlags = preliminary.redFlags || [];
   if (redFlags.includes("Missing odds")) challenges.push("No market price — cannot validate value");
-  if (redFlags.includes("Extremely small sample")) challenges.push("Sample too thin for confidence");
+  if (redFlags.includes("Extremely small sample")) challenges.push("Sample thin");
   if (redFlags.includes("Injury uncertainty")) challenges.push("Injury status unresolved");
   if (redFlags.includes("Unknown starting lineup")) challenges.push("Starting lineup not confirmed");
-  if ((preliminary.modelProb || 0) < 0.53) challenges.push("Model probability below LEAN threshold");
-  if (preliminary.edge != null && preliminary.edge < 1) challenges.push("Edge below minimum");
-  if ((preliminary.dataQuality || "Low") === "Low") challenges.push("Data quality too low");
+  if ((preliminary.modelProb || 0) < 0.53) challenges.push("Model probability below ideal LEAN bar");
+  if (preliminary.edge != null && preliminary.edge < 1) challenges.push("Edge below ideal minimum");
+  if ((preliminary.dataQuality || "Low") === "Low") challenges.push("Data quality low");
   const severity = challenges.length;
+  // Autopsy no longer hard-blocks LEAN — only informs LOCK eligibility
   const survived = severity < 3 && (preliminary.modelProb || 0) >= 0.52;
   return {
     challenges,
     topChallenge: challenges[0] || "No critical autopsy failure",
     severity,
     survived,
-    action: survived ? "PASS" : "FORCE_NO_PLAY",
-    verdict: survived ? "Survived adversarial review" : "Failed autopsy: " + (challenges[0] || "insufficient evidence")
+    action: survived ? "PASS" : "DOWNGRADE_TO_LEAN",
+    verdict: survived
+      ? "Survived adversarial review"
+      : "Weak autopsy — publish as LEAN only: " + (challenges[0] || "thin evidence")
   };
 }
 
@@ -171,10 +212,11 @@ export function evaluateMatchup(ctx = {}) {
   const sampleNote = String(ctx.sampleNote || "");
   const missing = String(ctx.missing || "");
 
-  // Base model from available text signals (conservative)
   let modelProb = 0.5;
-  if (/stronger season record|holds stronger|clear edge|elite form|dominant/i.test(supporting + form)) modelProb = 0.58;
-  else if (/close season records|limited edge|close records/i.test(supporting + form)) modelProb = 0.52;
+  if (/stronger season record|holds stronger|clear edge|elite form|dominant/i.test(supporting + form))
+    modelProb = 0.58;
+  else if (/close season records|limited edge|close records/i.test(supporting + form))
+    modelProb = 0.52;
   else if (/weak|cold|struggling|fade/i.test(supporting + form)) modelProb = 0.46;
 
   if (isThinSample(form + sampleNote) || /thin sample/i.test(sampleNote)) {
@@ -182,7 +224,8 @@ export function evaluateMatchup(ctx = {}) {
     if (!redFlags.includes("Extremely small sample")) redFlags.push("Extremely small sample");
   }
   if (redFlags.length >= 2) modelProb = clamp(modelProb - 0.04, 0.42, 0.65);
-  if (/injury|lineup not|missing/i.test(missing + opposing)) modelProb = clamp(modelProb - 0.03, 0.42, 0.65);
+  if (/injury|lineup not|missing/i.test(missing + opposing))
+    modelProb = clamp(modelProb - 0.03, 0.42, 0.65);
 
   modelProb = clamp(modelProb, 0.42, 0.68);
 
@@ -199,51 +242,53 @@ export function evaluateMatchup(ctx = {}) {
   if (availableCount >= 3 && !redFlags.includes("Extremely small sample")) dataQuality = "Medium";
   if (availableCount >= 3 && market.available && redFlags.length === 0) dataQuality = "High";
 
-  const preliminary = {
-    modelProb,
-    edge,
-    redFlags,
-    dataQuality,
-    sport,
-    form,
-    situational
-  };
-
+  const preliminary = { modelProb, edge, redFlags, dataQuality, sport, form, situational };
   const whatIf = runWhatIfScenarios(preliminary, ctx);
   const autopsy = runPredictionAutopsy({ ...preliminary, edge }, ctx);
 
-  // Classification — NEVER auto-LOCK without strict gates
-  let playLevel = "NO PLAY";
-  let playEmoji = "🔴";
   const hasNamed = !!(ctx.selection && ctx.selection !== "—" && ctx.game && ctx.game !== "—");
-  const hardBlock =
-    !hasNamed ||
-    (redFlags.includes("Missing odds") && !ctx.allowNoOdds) ||
-    redFlags.filter((f) => /Injury uncertainty|Unknown starting lineup|Extremely small sample/.test(f)).length >= 2 ||
-    whatIf.classification === "FRAGILE" ||
-    !autopsy.survived;
 
-  if (!hardBlock) {
-    if (
-      modelProb >= 0.57 &&
-      (edge == null || edge >= 3.5) &&
-      dataQuality !== "Low" &&
-      autopsy.survived &&
-      whatIf.classification !== "FRAGILE"
-    ) {
-      playLevel = "STRONG PLAY";
-      playEmoji = "🟢";
-    } else if (modelProb >= 0.53 && (edge == null || edge >= 1.0) && dataQuality !== "Low") {
-      playLevel = "LEAN";
-      playEmoji = "🟡";
-    }
+  // LOCK only when strict gates pass
+  let playLevel = "LEAN";
+  let playEmoji = "🟡";
+  let forced = false;
+
+  if (!hasNamed) {
+    playLevel = "NO PLAY";
+    playEmoji = "🔴";
+  } else if (
+    modelProb >= 0.57 &&
+    (edge == null || edge >= 3.5) &&
+    dataQuality !== "Low" &&
+    autopsy.survived &&
+    whatIf.classification !== "FRAGILE" &&
+    !redFlags.some((f) => /Injury uncertainty|Unknown starting lineup|Extremely small sample|Missing odds/i.test(f))
+  ) {
+    playLevel = "STRONG PLAY";
+    playEmoji = "🟢";
+  } else if (modelProb >= 0.53 && (edge == null || edge >= 1.0) && dataQuality !== "Low") {
+    playLevel = "LEAN";
+    playEmoji = "🟡";
+  } else {
+    // Force LEAN — always publish a side when named
+    playLevel = "LEAN";
+    playEmoji = "🟡";
+    forced = true;
+    if (!redFlags.includes("Forced play — thin evidence"))
+      redFlags.push("Forced play — thin evidence");
   }
 
   const top3 = [];
   if (supporting) top3.push(supporting.slice(0, 120));
   if (form) top3.push("Form/records: " + form.slice(0, 100));
-  if (market.available && edge != null) top3.push("Market edge: " + (edge >= 0 ? "+" : "") + edge + "% at " + oddsDisplay);
-  while (top3.length < 3) top3.push(top3.length === 0 ? "Limited verified statistical support" : "Data gaps remain on injuries/lineups/market depth");
+  if (market.available && edge != null)
+    top3.push("Market edge: " + (edge >= 0 ? "+" : "") + edge + "% at " + oddsDisplay);
+  while (top3.length < 3)
+    top3.push(
+      top3.length === 0
+        ? "Best available side from current board"
+        : "Data gaps remain on injuries/lineups/market depth"
+    );
 
   const biggestRisk =
     redFlags[0] ||
@@ -258,6 +303,7 @@ export function evaluateMatchup(ctx = {}) {
     edge,
     playLevel,
     playEmoji,
+    forced,
     dataQuality,
     redFlags,
     top3: top3.slice(0, 3),
@@ -295,11 +341,14 @@ export function stressTestPick(ctx) {
 export function formatAnalysisDiscord(r) {
   if (!r) return "No analysis.";
   return [
-    r.playEmoji + " " + r.playLevel,
+    r.playEmoji + " " + r.playLevel + (r.forced ? " (forced)" : ""),
     "Model: " + r.probabilityPct + "% · Edge: " + (r.edge != null ? r.edge + "%" : "n/a"),
     "Data: " + r.dataQuality,
     r.autopsyVerdict ? "Autopsy: " + r.autopsyVerdict : null
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-export const ANALYTICS_FOOTER = "EDGE PLAY · evidence-based · market-aware · what-if gated · autopsy-gated · never force a lock · 21+";
+export const ANALYTICS_FOOTER =
+  "EDGE PLAY · always publishes best available play · LOCK only when evidence is strong · 21+";
