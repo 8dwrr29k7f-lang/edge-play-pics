@@ -1,7 +1,8 @@
 /**
  * Standardized pick card — every prediction uses the same transparent format.
- * Driven by the multi-factor analytics engine.
+ * Driven by the multi-factor analytics engine + Prediction Autopsy.
  * NEVER forces a LOCK. Outcomes: STRONG PLAY / LEAN / NO PLAY.
+ * A pick is only STRONG PLAY if it survives both the case FOR and the case AGAINST.
  */
 
 import {
@@ -13,7 +14,6 @@ import {
 export { parseOddsToImplied };
 
 export function estimateModelProb(tier, sport, hasNamedGame) {
-  // Legacy fallback only — real model lives in evaluateMatchup
   if (!hasNamedGame) return null;
   const t = (tier || "").toUpperCase();
   if (t === "LOCK" || t === "CAP") return 0.58;
@@ -39,7 +39,7 @@ export function confidencePct(modelProb, confLevel) {
 }
 
 /**
- * Core standardization — runs the full multi-factor engine.
+ * Core standardization — runs multi-factor engine + mandatory autopsy.
  */
 export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) {
   if (!p) {
@@ -59,7 +59,6 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
   const price = p.price || p.priceGuide || p.odds || "—";
   const units = p.units ?? 0;
 
-  // Hard rejects before engine
   if (
     !selection ||
     /process side|soft-side|confirmed sp side|lineup-confirmed|wait sp|board scan|shop day|no forced/i.test(
@@ -80,7 +79,6 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     };
   }
 
-  // Build context for the engine from whatever the desk supplies
   const reasoning = p.reasoning || p.analysis || {};
   const ctx = {
     sport,
@@ -106,17 +104,21 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
   };
 
   const ev = evaluateMatchup(ctx);
-
-  // Map engine output → standardized card
   const noPlay = ev.playLevel === "NO PLAY";
+
+  const autopsyLine =
+    ev.autopsyVerdict ||
+    (ev.autopsySurvived ? "Survived adversarial review" : "Failed autopsy");
 
   const finalBlock = noPlay
     ? formatNoPlay(
-        ev.redFlags.length
-          ? `Red flags: ${ev.redFlags.slice(0, 2).join("; ")}`
-          : ev.dataQuality === "Low"
-            ? "Insufficient verified data coverage."
-            : "Model probability / edge below threshold for a play."
+        ev.autopsy && ev.autopsy.action === "FORCE_NO_PLAY"
+          ? `Autopsy failed: ${ev.autopsy.topChallenge || ev.autopsyVerdict}`
+          : ev.redFlags?.length
+            ? `Red flags: ${ev.redFlags.slice(0, 2).join("; ")}`
+            : ev.dataQuality === "Low"
+              ? "Insufficient verified data coverage."
+              : "Model probability / edge below threshold or failed autopsy."
       )
     : [
         "━━━━━━━━━━━━━━━━",
@@ -137,11 +139,10 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
         "",
         `📊 DATA QUALITY: ${ev.dataQuality}`,
         ev.modelAgreement ? `🤖 MODEL AGREEMENT: ${ev.modelAgreement}` : null,
+        `🔬 AUTOPSY: ${autopsyLine}`,
         "",
         "FINAL:",
-        noPlay
-          ? `No actionable edge on ${selection} — pass.`
-          : `${ev.playEmoji} ${ev.playLevel} on ${selection} at ${ev.oddsDisplay} (model ${ev.probabilityPct}%, edge ${ev.edge != null ? (ev.edge >= 0 ? "+" : "") + ev.edge + "%" : "n/a"}).`
+        `${ev.playEmoji} ${ev.playLevel} on ${selection} at ${ev.oddsDisplay} (model ${ev.probabilityPct}%, edge ${ev.edge != null ? (ev.edge >= 0 ? "+" : "") + ev.edge + "%" : "n/a"}). Survived case-for + case-against.`
       ]
         .filter((x) => x != null)
         .join("\n");
@@ -152,12 +153,12 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
 
   return {
     noPick: noPlay,
-    reason: noPlay ? "Engine returned NO PLAY" : null,
+    reason: noPlay ? "Engine returned NO PLAY (model or autopsy)" : null,
     sport,
     game,
     selection,
     pickLine: "PICK: " + selection,
-    tier: ev.playLevel, // override legacy LOCK with honest level
+    tier: ev.playLevel,
     units: noPlay ? 0 : units,
     confidencePct: ev.probabilityPct,
     confidenceLevel: ev.confidence,
@@ -165,7 +166,7 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     impliedProb: ev.implied != null ? Math.round(ev.implied * 1000) / 10 : null,
     modelProb: Math.round(ev.modelProb * 1000) / 10,
     edge: ev.edge,
-    risk: ev.redFlags.length ? "High" : ev.dataQuality === "High" ? "Medium" : "High",
+    risk: ev.redFlags?.length || (ev.autopsySeverity || 0) >= 3 ? "High" : ev.dataQuality === "High" ? "Medium" : "High",
     dataFreshness: freshness,
     dataQuality: ev.dataQuality,
     playLevel: ev.playLevel,
@@ -182,6 +183,9 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     biggestRisk: ev.biggestRisk,
     modelAgreement: ev.modelAgreement,
     redFlags: ev.redFlags,
+    autopsyVerdict: ev.autopsyVerdict,
+    autopsySeverity: ev.autopsySeverity,
+    autopsySurvived: ev.autopsySurvived,
     finalLine: finalBlock,
     reasoning: ev
   };
@@ -199,13 +203,14 @@ function formatNoPlay(reason) {
     "",
     "🔥 TOP 3 REASONS",
     "• Insufficient verified statistical support",
-    "• Data quality or sample size inadequate",
+    "• Data quality, sample size, or autopsy failure",
     "• Engine refuses to force a lock",
     "",
     "⚠️ BIGGEST RISK",
     `• ${reason}`,
     "",
     "📊 DATA QUALITY: Low",
+    "🔬 AUTOPSY: Failed or not applicable",
     "",
     "FINAL:",
     `No play — ${reason}`
@@ -220,11 +225,10 @@ export function formatStandardDiscord(std, { compact = false } = {}) {
     return [
       `${std.playEmoji || "🎯"} **${std.selection}**`,
       `📊 ${std.confidencePct ?? "—"}% · 💰 ${std.oddsDisplay} · 📈 ${std.edge != null ? (std.edge >= 0 ? "+" : "") + std.edge + "%" : "n/a"}`,
-      `${std.playEmoji} ${std.playLevel} · ${std.units}u · DQ ${std.dataQuality}`
+      `${std.playEmoji} ${std.playLevel} · ${std.units}u · DQ ${std.dataQuality}${std.autopsySurvived === false ? " · autopsy↓" : ""}`
     ].join("\n");
   }
 
-  // Full card already built by standardizePick
   return std.finalLine;
 }
 
@@ -232,7 +236,7 @@ export function formatParlayDiscord(legs) {
   if (!legs?.length) return formatNoPlay("No valid legs.");
   const parts = legs.map((L, i) => {
     const std = standardizePick(L);
-    if (std.noPick) return `**Leg ${i + 1}:** 🔴 NO PLAY — ${std.reason || "engine reject"}`;
+    if (std.noPick) return `**Leg ${i + 1}:** 🔴 NO PLAY — ${std.reason || "engine/autopsy reject"}`;
     return `**Leg ${i + 1}: ${std.selection}** — model ${std.modelProb}% · edge ${std.edge != null ? std.edge + "%" : "n/a"} · ${std.playEmoji} ${std.playLevel}`;
   });
   const probs = legs
@@ -244,6 +248,6 @@ export function formatParlayDiscord(legs) {
     parts.join("\n\n") +
     "\n\n**Combined est. probability:** " +
     (combined != null ? (combined * 100).toFixed(1) + "%" : "n/a") +
-    "\n_Combining legs multiplies uncertainty. Prefer single plays._"
+    "\n_Combining legs multiplies uncertainty. Prefer single plays that survived autopsy._"
   );
 }
