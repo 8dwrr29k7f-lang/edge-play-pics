@@ -194,10 +194,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply();
       const board = await ensureTodayCard();
       const e = new EmbedBuilder()
-        .setColor(board?.noPlay ? 0xe74c3c : 0x2ecc71)
-        .setTitle(board?.noPlay ? "🚫 NO QUALIFYING PLAY TODAY" : "📡 DAILY BOARD")
+        .setColor(board?.emptyBoard ? 0x95a5a6 : 0x2ecc71)
+        .setTitle(board?.emptyBoard ? "📡 BOARD · WAITING FOR GAMES" : "📡 DAILY BOARD")
         .setDescription((board?.text || "No board.").slice(0, 4000))
-        .setFooter({ text: "EDGE PLAY · never force locks · 21+" })
+        .setFooter({ text: "EDGE PLAY · best available play · 21+" })
         .setTimestamp();
       await interaction.editReply({ embeds: [e] });
       return;
@@ -207,7 +207,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply();
       const board = await rollDailyCard({ force: true });
       const e = new EmbedBuilder()
-        .setColor(board?.noPlay ? 0xe74c3c : 0x2ecc71)
+        .setColor(board?.emptyBoard ? 0x95a5a6 : 0x2ecc71)
         .setTitle("🔬 FORCED SCAN COMPLETE")
         .setDescription((board?.text || "Done.").slice(0, 4000))
         .setTimestamp();
@@ -285,7 +285,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           [
             ...health.lines,
             "",
-            `**Board:** ${board ? (board.stale ? "STALE" : board.noPlay ? "NO PLAY" : "LIVE") : "none yet"}`,
+            `**Board:** ${board ? (board.stale ? "STALE" : board.emptyBoard ? "WAITING FOR GAMES" : "LIVE") : "none yet"}`,
             `**Tracker:** ${sum.record} (${sum.pending} pending)`,
             `**Channel:** ${config.picsChannelId ? "set" : "MISSING PICS_CHANNEL_ID"}`,
             `**Scan interval:** ${config.scanMinutes || 15}m · PORT ${PORT}`
