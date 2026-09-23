@@ -1,5 +1,5 @@
 /**
- * EDGE PLAY — Evidence multi-factor engine (v11)
+ * EDGE PLAY — Evidence multi-factor engine (v11.1)
  *
  * Uses: season records (quantitative), home/away, rest flags, market price,
  * optional media agreement. Never fabricates data.
@@ -32,7 +32,7 @@ export function parseOddsToImplied(price) {
   if (am) {
     const n = Number(am[1]);
     const implied = n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
-    return { implied, oddsDisplay: n > 0 ? "+" : "" + String(n), source: "american" };
+    return { implied, oddsDisplay: n > 0 ? "+" + n : String(n), source: "american" };
   }
   return { implied: null, oddsDisplay: s.slice(0, 40), source: "unparsed" };
 }
@@ -70,7 +70,6 @@ function detectRedFlags(ctx = {}) {
     if (re.test(blob)) flags.push(flag);
   }
   if (isThinSample(blob)) flags.push("Extremely small sample");
-  // Missing odds is informational, not always a hard kill for LEAN
   if (!ctx.price || ctx.price === "—") flags.push("Missing odds");
   return [...new Set(flags)];
 }
@@ -181,7 +180,6 @@ export function runPredictionAutopsy(preliminary) {
   if ((preliminary.modelProb || 0) < 0.52) challenges.push("Model probability below LEAN bar");
   if ((preliminary.dataQuality || "Low") === "Low") challenges.push("Data quality low");
   const severity = challenges.length;
-  // Survived if not critically broken — missing odds alone does not fail autopsy
   const survived =
     severity < 3 &&
     (preliminary.modelProb || 0) >= 0.52 &&
@@ -197,9 +195,6 @@ export function runPredictionAutopsy(preliminary) {
   };
 }
 
-/**
- * Build model probability from quantitative inputs when present.
- */
 function computeModelProb(ctx, weights, redFlags) {
   let modelProb = 0.5;
   const gap =
@@ -209,9 +204,7 @@ function computeModelProb(ctx, weights, redFlags) {
   const sidePct =
     ctx.sidePct != null && Number.isFinite(Number(ctx.sidePct)) ? Number(ctx.sidePct) : null;
 
-  // Quantitative record gap (best signal from ESPN board)
   if (gap != null) {
-    // gap 0.08 → ~0.54, gap 0.15 → ~0.58, gap 0.25 → ~0.63
     modelProb = clamp(0.5 + gap * 0.55 * (weights.record / 0.25), 0.42, 0.66);
   } else if (sidePct != null) {
     modelProb = clamp(0.45 + sidePct * 0.2, 0.42, 0.62);
@@ -230,7 +223,6 @@ function computeModelProb(ctx, weights, redFlags) {
   const form = String(ctx.form || "");
   const missing = String(ctx.missing || "");
 
-  // Home bump when side is home and has positive gap
   if (ctx.isHome && (gap == null || gap > 0)) {
     modelProb += 0.02 * (weights.homeAway / 0.1);
   }
@@ -254,7 +246,6 @@ function computeModelProb(ctx, weights, redFlags) {
     }
   }
 
-  // Media agreement (soft, never sole basis for LOCK)
   const media = String(ctx.media || ctx.mediaNote || "");
   if (media && /agree|backs|on\s+this|media\s+lean|tout/i.test(media)) {
     modelProb += 0.015;
@@ -296,13 +287,18 @@ export function evaluateMatchup(ctx = {}) {
   const implied = market.implied;
   const oddsDisplay = market.oddsDisplay;
 
-  // Data quality: stats-only can be Medium; +odds clean = High
   let dataQuality = "Low";
   const hasForm = form.length > 8;
   const hasSupport = supporting.length > 8 || (ctx.recordGap != null && Math.abs(ctx.recordGap) >= 0.05);
   const thin = redFlags.includes("Extremely small sample");
   if (hasForm && hasSupport && !thin) dataQuality = "Medium";
-  if (hasForm && hasSupport && market.available && !thin && redFlags.filter((f) => f !== "Missing odds").length === 0)
+  if (
+    hasForm &&
+    hasSupport &&
+    market.available &&
+    !thin &&
+    redFlags.filter((f) => f !== "Missing odds").length === 0
+  )
     dataQuality = "High";
 
   const preliminary = { modelProb, edge, redFlags, dataQuality, sport, form, situational };
@@ -335,13 +331,11 @@ export function evaluateMatchup(ctx = {}) {
     dataQuality !== "Low" &&
     autopsy.survived &&
     hardCritical.length === 0 &&
-    // LEAN: allow null edge (stats-only) OR edge >= 0.5
     (edge == null || edge >= 0.5)
   ) {
     playLevel = "LEAN";
     playEmoji = "🟡";
   } else if (
-    // Secondary LEAN: large record gap + medium data even if autopsy soft
     modelProb >= 0.55 &&
     ctx.recordGap != null &&
     Number(ctx.recordGap) >= 0.1 &&
