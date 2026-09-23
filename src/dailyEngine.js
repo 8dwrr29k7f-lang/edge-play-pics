@@ -1,13 +1,16 @@
 /**
- * DAILY SPORTS ANALYTICS ENGINE
- * SCAN → ANALYZE → FILTER → PUBLISH → MONITOR → UPDATE → REVIEW → LEARN
+ * DAILY SPORTS ANALYTICS ENGINE (v10 PRODUCTION)
+ * SCAN → ANALYZE → FILTER → VALIDATE → PUBLISH → MONITOR → AUTO-GRADE → LEARN
  *
- * POLICY: Always publish at least one play when any live event exists.
- * Prefer LOCK when evidence is strong; otherwise force best available LEAN.
- * Never return an empty / NO PLAY board when games are available.
+ * POLICY:
+ * - Publish LOCK only when evidence is strong
+ * - Publish LEAN when evidence is adequate
+ * - Prefer NO PLAY / empty board over inventing confidence
+ * - Never fabricate odds, injuries, lineups, or results
+ * - Auto-detect wins/losses from ESPN finals when possible
  */
 import { evaluateMatchup } from "./analyticsEngine.js";
-import { ingestLivePicks } from "./trackerCore.js";
+import { ingestLivePicks, autoGradeFromFinals } from "./trackerCore.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -26,7 +29,7 @@ const FEEDS = {
 
 const MIN_EDGE_LOCK = 3.5;
 const MIN_MODEL_LOCK = 0.57;
-const MIN_EDGE_LEAN = 1.5;
+const MIN_EDGE_LEAN = 1.0;
 const MIN_MODEL_LEAN = 0.53;
 const STALE_MS = 3 * 60 * 60 * 1000;
 
@@ -57,7 +60,7 @@ async function fetchBoard(url, dates) {
   if (dates) u += (u.includes("?") ? "&" : "?") + "dates=" + dates;
   const res = await fetch(u, {
     signal: AbortSignal.timeout(12000),
-    headers: { "User-Agent": "EDGE-PLAY-PICS/4.3" }
+    headers: { "User-Agent": "EDGE-PLAY-PICS/4.4" }
   });
   if (!res.ok) throw new Error("ESPN " + res.status);
   return res.json();
@@ -147,7 +150,6 @@ function buildCtxFromEvent(ev, sportKey) {
     status,
     analyzedAt: isoNow(),
     lastVerified: isoNow(),
-    // ranking helpers
     _sidePct: side.pct,
     _otherPct: other.pct,
     _recordGap: side.pct - other.pct
@@ -189,7 +191,6 @@ export async function dailyScan({ sports = ["mlb", "nfl", "nba", "nhl"] } = {}) 
   };
 }
 
-/** Rank score: higher = stronger candidate for forced play */
 function rankScore(item) {
   const model = item.modelProb != null ? item.modelProb : 0.5;
   const edge = item.edge != null ? item.edge : 0;
@@ -202,7 +203,7 @@ function rankScore(item) {
 export function analyzeCandidates(scanResult) {
   const topPlays = [];
   const leans = [];
-  const allRanked = [];
+  const noPlays = [];
 
   for (const ev of scanResult.events || []) {
     let bestForEvent = null;
@@ -219,8 +220,7 @@ export function analyzeCandidates(scanResult) {
         supporting: cand.supporting,
         opposing: cand.opposing,
         openPrice: cand.openPrice,
-        currentPrice: cand.currentPrice,
-        allowNoOdds: true
+        currentPrice: cand.currentPrice
       };
       const evRes = evaluateMatchup(ctx);
       const item = {
@@ -237,47 +237,49 @@ export function analyzeCandidates(scanResult) {
         autopsySurvived: evRes.autopsySurvived,
         marketSignal: evRes.marketSignal,
         whatIfClassification: evRes.whatIfClassification,
+        dataStatus: evRes.dataStatus,
         analyzedAt: cand.analyzedAt,
-        lastVerified: isoNow()
+        lastVerified: isoNow(),
+        createdAt: evRes.createdAt || cand.analyzedAt
       };
 
-      const isLock =
-        (evRes.playLevel === "STRONG PLAY" || evRes.playLevel === "LEAN") &&
-        (evRes.edge == null || evRes.edge >= MIN_EDGE_LOCK) &&
-        evRes.modelProb >= MIN_MODEL_LOCK &&
-        evRes.autopsySurvived !== false &&
-        (evRes.dataQuality === "High" || evRes.dataQuality === "Medium") &&
-        !(evRes.redFlags || []).some((f) =>
-          /injury|unknown lineup|missing odds|thin sample/i.test(f)
-        );
-
-      if (isLock) {
-        item.tier = "LOCK";
-        item.playLevel = "STRONG PLAY";
-        item.forced = false;
-      } else if (
-        (evRes.playLevel === "LEAN" || evRes.playLevel === "STRONG PLAY") &&
-        evRes.modelProb >= MIN_MODEL_LEAN
-      ) {
+      if (evRes.playLevel === "STRONG PLAY") {
+        const isLock =
+          (evRes.edge == null || evRes.edge >= MIN_EDGE_LOCK) &&
+          evRes.modelProb >= MIN_MODEL_LOCK &&
+          evRes.autopsySurvived !== false &&
+          (evRes.dataQuality === "High" || evRes.dataQuality === "Medium") &&
+          !(evRes.redFlags || []).some((f) =>
+            /injury|unknown lineup|missing odds|thin sample/i.test(f)
+          );
+        if (isLock) {
+          item.tier = "LOCK";
+          item.playLevel = "STRONG PLAY";
+          item.forced = false;
+        } else {
+          item.tier = "LEAN";
+          item.playLevel = "LEAN";
+          item.forced = false;
+        }
+      } else if (evRes.playLevel === "LEAN") {
         item.tier = "LEAN";
         item.forced = false;
       } else {
-        // Still keep as candidate for forced-play ranking
-        item.tier = "LEAN";
-        item.playLevel = "LEAN";
-        item.forced = true;
-        if (!item.redFlags.includes("Forced play — thin evidence")) {
-          item.redFlags = [...item.redFlags, "Forced play — thin evidence"];
-        }
+        item.tier = "NO PLAY";
+        item.playLevel = "NO PLAY";
+        item.forced = false;
       }
 
-      if (!bestForEvent || rankScore(item) > rankScore(bestForEvent)) {
-        bestForEvent = item;
+      if (item.playLevel !== "NO PLAY") {
+        if (!bestForEvent || rankScore(item) > rankScore(bestForEvent)) {
+          bestForEvent = item;
+        }
+      } else {
+        noPlays.push(item);
       }
-      allRanked.push(item);
     }
     if (bestForEvent) {
-      if (bestForEvent.tier === "LOCK" && !bestForEvent.forced) topPlays.push(bestForEvent);
+      if (bestForEvent.tier === "LOCK") topPlays.push(bestForEvent);
       else leans.push(bestForEvent);
     }
   }
@@ -285,43 +287,12 @@ export function analyzeCandidates(scanResult) {
   topPlays.sort((a, b) => rankScore(b) - rankScore(a));
   leans.sort((a, b) => rankScore(b) - rankScore(a));
 
-  // ALWAYS force at least one play when any event/candidate exists
-  let forcedPlay = null;
-  if (topPlays.length === 0 && leans.length === 0 && allRanked.length > 0) {
-    allRanked.sort((a, b) => rankScore(b) - rankScore(a));
-    forcedPlay = {
-      ...allRanked[0],
-      tier: "LEAN",
-      playLevel: "LEAN",
-      forced: true,
-      redFlags: [
-        ...new Set([...(allRanked[0].redFlags || []), "Forced play — best available on board"])
-      ]
-    };
-    leans.push(forcedPlay);
-  }
-
-  // Cap board size
-  const finalLocks = topPlays.slice(0, 5);
-  let finalLeans = leans.slice(0, 8);
-
-  // If still empty somehow but we have ranked, force top 1–3
-  if (finalLocks.length === 0 && finalLeans.length === 0 && allRanked.length > 0) {
-    allRanked.sort((a, b) => rankScore(b) - rankScore(a));
-    finalLeans = allRanked.slice(0, 3).map((p) => ({
-      ...p,
-      tier: "LEAN",
-      playLevel: "LEAN",
-      forced: true,
-      redFlags: [...new Set([...(p.redFlags || []), "Forced play — best available on board"])]
-    }));
-  }
-
   return {
-    topPlays: finalLocks,
-    leans: finalLeans,
-    forcedPlay,
-    qualifying: finalLocks.length + finalLeans.length > 0,
+    topPlays: topPlays.slice(0, 5),
+    leans: leans.slice(0, 8),
+    noPlays: noPlays.slice(0, 10),
+    forcedPlay: null,
+    qualifying: topPlays.length + leans.length > 0,
     eventCount: (scanResult.events || []).length
   };
 }
@@ -331,20 +302,33 @@ export function buildDailyBoard(analysis, scanMeta) {
   lines.push("━━━━━━━━━━━━━━━━━━");
   lines.push(`📡 DAILY BOARD · ${scanMeta.stamp || nowStamp()} CT`);
   lines.push("━━━━━━━━━━━━━━━━━━");
-  lines.push(`Scanned ${scanMeta.eventCount || 0} events · Always publishes best available play`);
+  lines.push(
+    `Scanned ${scanMeta.eventCount || 0} events · Evidence-first (NO PLAY when data is thin)`
+  );
   lines.push("");
 
-  // No events at all (off-season / feed down) — still avoid "NO PLAY" framing
   if (!analysis.qualifying) {
     lines.push("📡 BOARD STATUS");
-    lines.push("No live games on the ESPN boards right now.");
-    lines.push("Bot will publish the top ranked play as soon as events appear.");
-    lines.push("Run `/scan` after tip-off windows open.");
+    if ((scanMeta.eventCount || 0) === 0) {
+      lines.push("No live games on the ESPN boards right now.");
+      lines.push("Bot will publish when events appear and evidence supports a side.");
+    } else {
+      lines.push("🚫 NO PLAY — insufficient verified evidence for a supported selection.");
+      lines.push("Games exist, but injuries/lineups/odds/sample quality do not clear the bar.");
+      lines.push("A lack of a pick is preferable to inventing confidence.");
+    }
+    lines.push("Run `/scan` after more information is confirmed.");
+    lines.push("");
+    lines.push("🕐 CREATED: " + (scanMeta.scannedAt || isoNow()));
+    lines.push("🔄 LAST VERIFIED: " + nowStamp());
+    lines.push("📡 DATA STATUS: ESPN public scoreboard only");
+    lines.push("");
+    lines.push("_Not a guarantee of outcomes. 21+ · 1-800-GAMBLER_");
     return {
       text: lines.join("\n"),
       topPlays: [],
       leans: [],
-      noPlay: false,
+      noPlay: true,
       emptyBoard: true,
       stamp: scanMeta.stamp,
       analyzedAt: scanMeta.scannedAt,
@@ -361,45 +345,53 @@ export function buildDailyBoard(analysis, scanMeta) {
       lines.push("━━━━━━━━━━━━━━━━━━");
       lines.push(`🎯 PICK: ${p.selection}`);
       lines.push(`🏟️ GAME: ${p.game} · ${p.sport}`);
-      lines.push(`📊 MODEL: ${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}`);
+      lines.push(`📊 MODEL PROBABILITY: ${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}`);
       lines.push(`💰 ODDS: ${p.price || "—"}`);
       lines.push(`📈 EDGE: ${p.edge != null ? (p.edge >= 0 ? "+" : "") + p.edge + "%" : "n/a"}`);
-      lines.push(`⚠️ RISK: ${p.redFlags?.length ? "HIGH" : p.dataQuality === "High" ? "MEDIUM" : "HIGH"}`);
-      lines.push(`📡 DATA: ${p.dataQuality || "LOW"}`);
+      lines.push(
+        `⚠️ RISK: ${p.redFlags?.length ? "HIGH" : p.dataQuality === "High" ? "MEDIUM" : "HIGH"}`
+      );
+      lines.push(`📡 DATA QUALITY: ${p.dataQuality || "LOW"}`);
+      lines.push(`📡 DATA STATUS: ${p.dataStatus || "ESPN snapshot"}`);
       lines.push("");
-      lines.push("🔥 WHY:");
+      lines.push("🔥 WHY IT'S SUPPORTED:");
       for (const r of (p.top3 || []).slice(0, 3)) lines.push(`• ${r}`);
       lines.push("");
-      lines.push(`⚠️ BIGGEST RISK: ${p.biggestRisk || "Unverified injuries / lineups / market depth"}`);
-      lines.push(`🕐 ANALYZED: ${p.analyzedAt ? new Date(p.analyzedAt).toLocaleString("en-US", { timeZone: "America/Chicago" }) : "—"}`);
+      lines.push(`🚨 BIGGEST RISK: ${p.biggestRisk || "Unverified injuries / lineups / market depth"}`);
+      lines.push(
+        `🕐 CREATED: ${p.analyzedAt ? new Date(p.analyzedAt).toLocaleString("en-US", { timeZone: "America/Chicago" }) : "—"}`
+      );
       lines.push(`🔄 LAST VERIFIED: ${nowStamp()}`);
     }
   }
 
   if (analysis.leans.length) {
     lines.push("");
-    lines.push("⭐ LEANS / BOARD PLAYS");
+    lines.push("⭐ LEANS");
     for (const p of analysis.leans) {
       lines.push("");
       lines.push("━━━━━━━━━━━━━━━━━━");
-      lines.push(p.forced ? "⭐ FORCED PLAY (best available)" : "⭐ DAILY PLAY");
+      lines.push("⭐ DAILY LEAN");
       lines.push("━━━━━━━━━━━━━━━━━━");
       lines.push(`🎯 PICK: ${p.selection}`);
       lines.push(`🏟️ GAME: ${p.game} · ${p.sport}`);
-      lines.push(`📊 MODEL: ${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}`);
+      lines.push(`📊 MODEL PROBABILITY: ${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}`);
       lines.push(`💰 ODDS: ${p.price || "—"}`);
       lines.push(`📈 EDGE: ${p.edge != null ? (p.edge >= 0 ? "+" : "") + p.edge + "%" : "n/a"}`);
-      lines.push(`⚠️ RISK: ${p.forced ? "HIGH (forced)" : "MEDIUM–HIGH"}`);
-      lines.push(`📡 DATA: ${p.dataQuality || "LOW"}`);
-      if (p.forced) {
-        lines.push("_Forced to board — evidence below ideal LOCK bar; still the strongest available side._");
+      lines.push(`⚠️ RISK: MEDIUM–HIGH`);
+      lines.push(`📡 DATA QUALITY: ${p.dataQuality || "LOW"}`);
+      lines.push(`📡 DATA STATUS: ${p.dataStatus || "ESPN snapshot"}`);
+      if (p.top3?.length) {
+        lines.push("🔥 WHY:");
+        for (const r of p.top3.slice(0, 2)) lines.push(`• ${r}`);
       }
-      lines.push(`🕐 LAST VERIFIED: ${nowStamp()}`);
+      lines.push(`🚨 BIGGEST RISK: ${p.biggestRisk || "Thin evidence"}`);
+      lines.push(`🔄 LAST VERIFIED: ${nowStamp()}`);
     }
   }
 
   lines.push("");
-  lines.push("_Always publishes best available play when games exist. Not a guarantee of outcomes._");
+  lines.push("_Evidence-first process. NO PLAY preferred over inventing confidence. Not a guarantee of outcomes._");
   lines.push("21+ · 1-800-GAMBLER");
 
   return {
@@ -449,7 +441,15 @@ export async function runDailyPipeline(opts = {}) {
 
 export async function reverifyPicks() {
   const state = loadState();
-  if (!state.picks?.length) return { updates: [], removed: [] };
+  if (!state.picks?.length) {
+    // Still try auto-grade even with empty board
+    try {
+      await autoGradePending();
+    } catch (e) {
+      console.warn("autoGrade:", e.message);
+    }
+    return { updates: [], removed: [] };
+  }
   const now = Date.now();
   const updates = [];
   const removed = [];
@@ -485,8 +485,13 @@ export async function reverifyPicks() {
         updates.push({
           type: "RESCAN",
           pick: "BOARD",
-          message: `🔄 AUTO RESCAN complete — ${(board?.topPlays || []).length} LOCK / ${(board?.leans || []).length} LEAN on board.`
+          message: `🔄 AUTO RESCAN complete — ${(board?.topPlays || []).length} LOCK / ${(board?.leans || []).length} LEAN · empty=${!!board?.emptyBoard}`
         });
+        try {
+          await autoGradePending();
+        } catch (e) {
+          console.warn("autoGrade after rescan:", e.message);
+        }
         return { updates, removed, state: newState };
       } catch (e) {
         console.warn("auto rescan failed:", e.message);
@@ -500,7 +505,61 @@ export async function reverifyPicks() {
   }
   state.lastVerify = isoNow();
   saveState(state);
+  try {
+    const graded = await autoGradePending();
+    if (graded?.length) {
+      for (const g of graded) {
+        updates.push({
+          type: "AUTO_GRADE",
+          pick: g.selection,
+          message: `✅ AUTO-GRADED ${g.selection} → **${g.result.toUpperCase()}** · PL ${g.pl >= 0 ? "+" : ""}${Number(g.pl).toFixed(2)}u`
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("autoGrade:", e.message);
+  }
   return { updates, removed, state };
+}
+
+/** Fetch finals from ESPN and auto-grade pending ML picks */
+export async function autoGradePending() {
+  const finals = [];
+  for (const key of Object.keys(FEEDS)) {
+    try {
+      const data = await fetchBoard(FEEDS[key].url, todayYYYYMMDD());
+      for (const ev of data.events || []) {
+        const comp = (ev.competitions || [])[0] || {};
+        const statusType = (comp.status || {}).type || {};
+        const status = statusType.description || statusType.shortDetail || "";
+        if (!/final/i.test(status)) continue;
+        const competitors = comp.competitors || [];
+        let home = null,
+          away = null;
+        for (const c of competitors) {
+          const team = c.team || {};
+          const abbr = team.abbreviation || team.shortDisplayName || "?";
+          const score = c.score != null ? Number(c.score) : null;
+          const winner = !!c.winner;
+          const obj = { abbr, score, winner };
+          if (c.homeAway === "home") home = obj;
+          else away = obj;
+        }
+        if (!home || !away) continue;
+        finals.push({
+          sport: FEEDS[key].sport,
+          game: `${away.abbr} @ ${home.abbr}`,
+          home,
+          away,
+          eventId: ev.id
+        });
+      }
+    } catch (e) {
+      console.warn("autoGrade feed", key, e.message);
+    }
+  }
+  if (!finals.length) return [];
+  return autoGradeFromFinals(finals);
 }
 
 export function getCurrentBoard() {
