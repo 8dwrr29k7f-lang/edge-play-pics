@@ -1,18 +1,12 @@
 /**
- * Category pipeline — never silently skip a category.
- *
- * For each category:
- * 1. Resolve registry entry
- * 2. Fetch live data (if feed exists)
- * 3. Run evaluateMatchup on each candidate
- * 4. Return LOCK / LEAN / NO VERIFIED PICK with explicit reason
- *
- * Static fake picks are forbidden.
+ * Category pipeline v11 — best available verified picks per sport.
+ * Stats (records) + market (ESPN odds when present) + media (API when configured).
  */
 
 import { evaluateMatchup } from "./analyticsEngine.js";
 import { getCategory, liveCategoryKeys, CATEGORY_REGISTRY } from "./categoryRegistry.js";
 import { ingestLivePicks } from "./trackerCore.js";
+import { config } from "./config.js";
 
 const FEEDS = {
   mlb: "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
@@ -28,11 +22,9 @@ const FEEDS = {
 function isoNow() {
   return new Date().toISOString();
 }
-
 function nowStamp() {
   return new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour12: true });
 }
-
 function todayYYYYMMDD() {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Chicago",
@@ -54,29 +46,86 @@ function parseRecord(summary) {
   const w = +m[1],
     l = +m[2],
     total = w + l;
-  if (total < 5) return { w, l, pct: 0.5, thin: true };
-  return { w, l, pct: w / total, thin: total < 20 };
+  if (total < 5) return { w, l, pct: 0.5, thin: true, total };
+  return { w, l, pct: w / total, thin: total < 15, total };
 }
 
 async function fetchEspn(url, dates) {
   let u = url;
   if (dates) u += (u.includes("?") ? "&" : "?") + "dates=" + dates;
   const res = await fetch(u, {
-    signal: AbortSignal.timeout(12000),
-    headers: { "User-Agent": "EDGE-PLAY-PICS/4.4-category" }
+    signal: AbortSignal.timeout(14000),
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; EDGE-PLAY-PICS/4.5)",
+      Accept: "application/json"
+    }
   });
   if (!res.ok) throw new Error(`ESPN HTTP ${res.status}`);
   return res.json();
 }
 
-function buildCandidates(ev, sportKey) {
+/** Optional media feed from EDGE_PLAY_API */
+async function fetchMediaItems() {
+  const base = (config.apiBase || "").replace(/\/$/, "");
+  if (!base) return [];
+  try {
+    const res = await fetch(`${base}/api/media`, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return [];
+    const j = await res.json();
+    return Array.isArray(j?.items) ? j.items : Array.isArray(j) ? j : [];
+  } catch {
+    return [];
+  }
+}
+
+function mediaNoteForTeam(items, abbr, name) {
+  if (!items?.length) return "";
+  const a = String(abbr || "").toLowerCase();
+  const n = String(name || "").toLowerCase();
+  const hits = items.filter((i) => {
+    const blob = `${i.pick || ""} ${i.text || ""} ${i.team || ""} ${i.selection || ""}`.toLowerCase();
+    return (a && blob.includes(a)) || (n && n.length > 3 && blob.includes(n.slice(0, 8)));
+  });
+  if (!hits.length) return "";
+  const h = hits[0];
+  return `${h.source || "media"}: ${h.pick || h.text || "lean noted"}`;
+}
+
+function extractTeamOdds(oddsArr, homeAway) {
+  if (!oddsArr?.length) return null;
+  const o = oddsArr[0] || {};
+  // Structured moneyline
+  if (homeAway === "home" && o.homeTeamOdds?.moneyLine != null) {
+    const n = Number(o.homeTeamOdds.moneyLine);
+    return n > 0 ? "+" + n : String(n);
+  }
+  if (homeAway === "away" && o.awayTeamOdds?.moneyLine != null) {
+    const n = Number(o.awayTeamOdds.moneyLine);
+    return n > 0 ? "+" + n : String(n);
+  }
+  // Alternate keys some ESPN payloads use
+  if (homeAway === "home" && o.homeOdds?.moneyLine != null) {
+    const n = Number(o.homeOdds.moneyLine);
+    return n > 0 ? "+" + n : String(n);
+  }
+  if (homeAway === "away" && o.awayOdds?.moneyLine != null) {
+    const n = Number(o.awayOdds.moneyLine);
+    return n > 0 ? "+" + n : String(n);
+  }
+  // details string often "TEAM -140" or spread line — only use if it looks like pure ML
+  if (o.details && /^[+-]?\d{3,4}$/.test(String(o.details).trim())) {
+    return String(o.details).trim();
+  }
+  return null;
+}
+
+function buildCandidates(ev, sportKey, mediaItems) {
   const comp = (ev.competitions || [])[0] || {};
   const statusType = (comp.status || {}).type || {};
   const status = statusType.description || statusType.shortDetail || "—";
   if (/final|postpon|cancel/i.test(status)) return null;
 
   const competitors = comp.competitors || [];
-  // Tennis / multi-player: treat as two competitors when present
   let home = null,
     away = null;
   for (const c of competitors) {
@@ -91,31 +140,37 @@ function buildCandidates(ev, sportKey) {
       record: rec?.summary || "—",
       pct: parsed?.pct ?? 0.5,
       thin: parsed?.thin ?? true,
-      homeAway: c.homeAway || (home ? "away" : "home")
+      total: parsed?.total ?? 0,
+      homeAway: c.homeAway
     };
-    if (c.homeAway === "home" || (!home && competitors.indexOf(c) === 0)) home = obj;
-    else away = obj;
+    if (c.homeAway === "home") home = obj;
+    else if (c.homeAway === "away") away = obj;
   }
-  // Fallback: first two competitors
   if (!home && competitors[0]) {
     const t = competitors[0].team || competitors[0].athlete || {};
+    const rec = (competitors[0].records || [])[0];
+    const parsed = parseRecord(rec?.summary);
     home = {
       abbr: t.abbreviation || t.shortDisplayName || t.displayName || "A",
       name: t.displayName || "A",
-      record: "—",
-      pct: 0.5,
-      thin: true,
+      record: rec?.summary || "—",
+      pct: parsed?.pct ?? 0.5,
+      thin: parsed?.thin ?? true,
+      total: parsed?.total ?? 0,
       homeAway: "home"
     };
   }
   if (!away && competitors[1]) {
     const t = competitors[1].team || competitors[1].athlete || {};
+    const rec = (competitors[1].records || [])[0];
+    const parsed = parseRecord(rec?.summary);
     away = {
       abbr: t.abbreviation || t.shortDisplayName || t.displayName || "B",
       name: t.displayName || "B",
-      record: "—",
-      pct: 0.5,
-      thin: true,
+      record: rec?.summary || "—",
+      pct: parsed?.pct ?? 0.5,
+      thin: parsed?.thin ?? true,
+      total: parsed?.total ?? 0,
       homeAway: "away"
     };
   }
@@ -123,53 +178,65 @@ function buildCandidates(ev, sportKey) {
 
   const game = `${away.abbr} @ ${home.abbr}`;
   const oddsArr = comp.odds || [];
-  const price = oddsArr[0]?.details || null;
-  const form = `${away.abbr} ${away.record} (pct ${(away.pct * 100).toFixed(0)}%) · ${home.abbr} ${home.record} (pct ${(home.pct * 100).toFixed(0)}%)`;
-  const situational = `Public ESPN · ${status} · ${ev.date || ""} · ${(comp.venue || {}).fullName || "—"}`;
+  const form = `${away.abbr} ${away.record} (${(away.pct * 100).toFixed(0)}%) · ${home.abbr} ${home.record} (${(home.pct * 100).toFixed(0)}%)`;
+  const situational = `ESPN · ${status} · ${ev.date || ""} · ${(comp.venue || {}).fullName || "—"}`;
   const sampleNote =
-    away.thin || home.thin ? "thin sample / limited games in record" : "season record sample available";
+    away.thin || home.thin
+      ? "thin sample / limited games in record"
+      : `sample n≈${Math.min(away.total || 99, home.total || 99)} games`;
   const missing =
-    "No verified injury report, lineup confirmation, or deep market from this feed.";
+    "Injuries/lineups not confirmed on this public feed — factored as uncertainty.";
 
-  const mk = (side, other) => ({
-    selection: `${side.abbr} ML`,
-    game,
-    sport: sportKey.toUpperCase(),
-    market: "ml",
-    price: price || "—",
-    form,
-    situational,
-    sampleNote,
-    missing,
-    supporting:
-      side.pct >= other.pct + 0.08
-        ? `${side.abbr} holds stronger season record vs ${other.abbr}`
-        : `Close season records — limited edge from standings alone`,
-    opposing: "Record edge alone is weak; injuries/lineups/odds not fully verified",
-    openPrice: null,
-    currentPrice: price,
-    eventId: ev.id,
-    status,
-    analyzedAt: isoNow(),
-    lastVerified: isoNow(),
-    _recordGap: side.pct - other.pct
-  });
+  const mk = (side, other, isHome) => {
+    const gap = side.pct - other.pct;
+    const price =
+      extractTeamOdds(oddsArr, isHome ? "home" : "away") ||
+      extractTeamOdds(oddsArr, isHome ? "home" : "away") ||
+      "—";
+    const media = mediaNoteForTeam(mediaItems, side.abbr, side.name);
+    const strong = gap >= 0.08;
+    return {
+      selection: `${side.abbr} ML`,
+      game,
+      sport: sportKey.toUpperCase(),
+      market: "ml",
+      price,
+      form,
+      situational,
+      sampleNote,
+      missing,
+      media,
+      mediaNote: media,
+      supporting: strong
+        ? `${side.abbr} holds stronger season win% (${(side.pct * 100).toFixed(0)}% vs ${(other.pct * 100).toFixed(0)}%)`
+        : `Close season records — limited standings edge`,
+      opposing: "Public feed lacks full injury/lineup confirmation",
+      openPrice: null,
+      currentPrice: price !== "—" ? price : null,
+      eventId: ev.id,
+      status,
+      analyzedAt: isoNow(),
+      lastVerified: isoNow(),
+      recordGap: gap,
+      sidePct: side.pct,
+      isHome,
+      _recordGap: gap
+    };
+  };
 
-  return [mk(home, away), mk(away, home)];
+  return [mk(home, away, true), mk(away, home, false)];
 }
 
 function rankScore(item) {
   const model = item.modelProb != null ? item.modelProb : 0.5;
   const edge = item.edge != null ? item.edge : 0;
   const gap = item._recordGap != null ? item._recordGap : 0;
-  const dq = item.dataQuality === "High" ? 0.03 : item.dataQuality === "Medium" ? 0.015 : 0;
-  return model * 100 + edge + gap * 20 + dq * 100;
+  const dq = item.dataQuality === "High" ? 4 : item.dataQuality === "Medium" ? 2 : 0;
+  const mediaBonus = item.media || item.mediaNote ? 1.5 : 0;
+  const lockBonus = item.tier === "LOCK" ? 8 : 0;
+  return model * 100 + edge * 1.2 + gap * 35 + dq + mediaBonus + lockBonus;
 }
 
-/**
- * Run full pipeline for one category key.
- * Always returns a visible result object — never silent skip.
- */
 export async function runCategoryPipeline(categoryKey) {
   const cat = getCategory(categoryKey);
   const stamp = nowStamp();
@@ -204,7 +271,6 @@ export async function runCategoryPipeline(categoryKey) {
     };
   }
 
-  // Kalshi / non-prediction desks
   if (cat.key === "kalshi") {
     return {
       key: cat.key,
@@ -242,9 +308,7 @@ export async function runCategoryPipeline(categoryKey) {
       emoji: cat.emoji,
       status: "NO_VERIFIED_PICK",
       noVerifiedPick: true,
-      reason:
-        cat.noFeedReason ||
-        `No verified live data source wired for ${cat.label}`,
+      reason: cat.noFeedReason || `No verified live data source for ${cat.label}`,
       locks: [],
       leans: [],
       eventsScanned: 0,
@@ -271,12 +335,12 @@ export async function runCategoryPipeline(categoryKey) {
   const dateKey = todayYYYYMMDD();
   const errors = [];
   let events = [];
+  const mediaItems = await fetchMediaItems();
 
   try {
     const data = await fetchEspn(url, dateKey);
     events = data.events || [];
   } catch (e) {
-    // Retry without date filter (some feeds reject dates=)
     try {
       const data = await fetchEspn(url, null);
       events = data.events || [];
@@ -317,8 +381,9 @@ export async function runCategoryPipeline(categoryKey) {
   const rejected = [];
   let candidatesAnalyzed = 0;
 
+  // Analyze all sides, keep best playable per event, then global rank
   for (const ev of events) {
-    const cands = buildCandidates(ev, cat.key);
+    const cands = buildCandidates(ev, cat.key, mediaItems);
     if (!cands) continue;
     let best = null;
     for (const cand of cands) {
@@ -335,7 +400,12 @@ export async function runCategoryPipeline(categoryKey) {
         supporting: cand.supporting,
         opposing: cand.opposing,
         openPrice: cand.openPrice,
-        currentPrice: cand.currentPrice
+        currentPrice: cand.currentPrice,
+        recordGap: cand.recordGap,
+        sidePct: cand.sidePct,
+        isHome: cand.isHome,
+        media: cand.media,
+        mediaNote: cand.mediaNote
       });
       const item = {
         ...cand,
@@ -354,16 +424,14 @@ export async function runCategoryPipeline(categoryKey) {
         createdAt: created
       };
 
-      if (evRes.playLevel === "STRONG PLAY") {
-        item.tier = "LOCK";
-      } else if (evRes.playLevel === "LEAN") {
-        item.tier = "LEAN";
-      } else {
+      if (evRes.playLevel === "STRONG PLAY") item.tier = "LOCK";
+      else if (evRes.playLevel === "LEAN") item.tier = "LEAN";
+      else {
         item.tier = "NO PLAY";
         rejected.push({
           selection: item.selection,
           game: item.game,
-          reason: evRes.biggestRisk || evRes.autopsyVerdict || "Insufficient evidence"
+          reason: evRes.biggestRisk || "Insufficient evidence"
         });
         continue;
       }
@@ -379,11 +447,11 @@ export async function runCategoryPipeline(categoryKey) {
   locks.sort((a, b) => rankScore(b) - rankScore(a));
   leans.sort((a, b) => rankScore(b) - rankScore(a));
 
+  // Global best-of: if no locks, promote top lean quality only (already LEAN)
   const topLocks = locks.slice(0, 5);
   const topLeans = leans.slice(0, 8);
   const hasPlay = topLocks.length + topLeans.length > 0;
 
-  // History: ingest verified plays only
   let historyAdded = 0;
   if (hasPlay) {
     try {
@@ -417,17 +485,18 @@ export async function runCategoryPipeline(categoryKey) {
       ? null
       : events.length === 0
         ? `No live ${cat.label} events on the ESPN board right now`
-        : `Scanned ${events.length} events / ${candidatesAnalyzed} sides — none cleared LOCK/LEAN evidence bar`,
+        : `Scanned ${events.length} events / ${candidatesAnalyzed} sides — none cleared evidence bar (need solid record gap / sample)`,
     locks: topLocks,
     leans: topLeans,
     rejectedSample: rejected.slice(0, 5),
     eventsScanned: events.length,
     candidatesAnalyzed,
+    mediaSignals: mediaItems.length,
     errors,
     created,
     lastVerified: isoNow(),
     stamp,
-    dataStatus: `ESPN ${cat.feedKey} · ${events.length} events`,
+    dataStatus: `ESPN ${cat.feedKey} · ${events.length} events · media ${mediaItems.length}`,
     factors: cat.factors,
     markets: cat.markets,
     historyAdded,
@@ -444,7 +513,6 @@ export async function runCategoryPipeline(categoryKey) {
   };
 }
 
-/** Run all live-enabled categories (for /best) */
 export async function runAllLiveCategories() {
   const keys = liveCategoryKeys();
   const results = [];
