@@ -1,21 +1,13 @@
 /**
- * EDGE PLAY — Evidence-based multi-factor decision engine (v10 PRODUCTION)
+ * EDGE PLAY — Evidence multi-factor engine (v11)
  *
- * PIPELINE (never skip):
- * DATA COLLECTION → VALIDATION → STATISTICAL ANALYSIS → MATCHUP ANALYSIS
- * → MARKET ANALYSIS → MODEL PREDICTION → ADVERSARIAL CHECK → FINAL VALIDATION
+ * Uses: season records (quantitative), home/away, rest flags, market price,
+ * optional media agreement. Never fabricates data.
  *
- * POLICY:
- * - LOCK / STRONG PLAY only when strict thresholds + autopsy pass
- * - LEAN when evidence is adequate but not LOCK-tier
- * - NO PLAY when evidence is insufficient — preferred over inventing confidence
- * - Never fabricate odds, injuries, lineups, records, or probabilities
+ * LOCK — strict (odds + edge + clean flags)
+ * LEAN — strong stats / media support; odds preferred but not always required
+ * NO PLAY — insufficient verified support
  */
-
-function safeNum(v, fallback = null) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
@@ -40,7 +32,7 @@ export function parseOddsToImplied(price) {
   if (am) {
     const n = Number(am[1]);
     const implied = n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
-    return { implied, oddsDisplay: n > 0 ? "+" + n : String(n), source: "american" };
+    return { implied, oddsDisplay: n > 0 ? "+" : "" + String(n), source: "american" };
   }
   return { implied: null, oddsDisplay: s.slice(0, 40), source: "unparsed" };
 }
@@ -56,10 +48,7 @@ const RED_FLAG_PATTERNS = [
   { re: /unknown lineup|lineup not confirmed|starting (pitcher|QB|goalie) TBA|TBD starter/i, flag: "Unknown starting lineup" },
   { re: /small sample|thin sample|n=\s*[1-5]\b|only [1-5] games?/i, flag: "Extremely small sample" },
   { re: /conflicting|mixed signals|split indicators/i, flag: "Conflicting statistics" },
-  { re: /no odds|odds unavailable|missing price/i, flag: "Missing odds" },
-  { re: /line move|steam|reverse line movement|sharp money/i, flag: "Large market movement" },
   { re: /outdated|stale data|last updated.*(yesterday|hours ago)/i, flag: "Outdated information" },
-  { re: /unusual matchup|first meeting|no H2H/i, flag: "Unusual / limited matchup history" },
   { re: /insufficient (history|data|sample)/i, flag: "Insufficient historical data" }
 ];
 
@@ -70,10 +59,6 @@ function detectRedFlags(ctx = {}) {
     ctx.sampleNote,
     ctx.missing,
     ctx.opposing,
-    ctx.bothSides,
-    ctx.kill,
-    ctx.stressFail,
-    ctx.facts,
     ctx.notes,
     ctx.game,
     ctx.selection
@@ -84,30 +69,31 @@ function detectRedFlags(ctx = {}) {
   for (const { re, flag } of RED_FLAG_PATTERNS) {
     if (re.test(blob)) flags.push(flag);
   }
-  if (!ctx.price || ctx.price === "—") flags.push("Missing odds");
   if (isThinSample(blob)) flags.push("Extremely small sample");
+  // Missing odds is informational, not always a hard kill for LEAN
+  if (!ctx.price || ctx.price === "—") flags.push("Missing odds");
   return [...new Set(flags)];
 }
 
-/** Sport-specific factor weights — only relevant signals for that sport */
 const SPORT_WEIGHTS = {
-  MLB: { record: 0.25, homeAway: 0.1, rest: 0.05, market: 0.25, form: 0.2, matchup: 0.15 },
-  NFL: { record: 0.2, homeAway: 0.12, rest: 0.1, market: 0.25, form: 0.18, matchup: 0.15 },
-  NBA: { record: 0.2, homeAway: 0.1, rest: 0.12, market: 0.25, form: 0.18, matchup: 0.15 },
-  NHL: { record: 0.2, homeAway: 0.1, rest: 0.08, market: 0.25, form: 0.2, matchup: 0.17 },
-  NCAAF: { record: 0.22, homeAway: 0.15, rest: 0.08, market: 0.2, form: 0.2, matchup: 0.15 },
+  MLB: { record: 0.28, homeAway: 0.1, rest: 0.05, market: 0.22, form: 0.2, matchup: 0.15 },
+  NFL: { record: 0.22, homeAway: 0.12, rest: 0.1, market: 0.25, form: 0.18, matchup: 0.13 },
+  NBA: { record: 0.22, homeAway: 0.1, rest: 0.12, market: 0.25, form: 0.18, matchup: 0.13 },
+  NHL: { record: 0.22, homeAway: 0.1, rest: 0.08, market: 0.25, form: 0.2, matchup: 0.15 },
+  NCAAF: { record: 0.25, homeAway: 0.15, rest: 0.08, market: 0.2, form: 0.2, matchup: 0.12 },
+  SOCCER: { record: 0.25, homeAway: 0.15, rest: 0.05, market: 0.25, form: 0.2, matchup: 0.1 },
   TENNIS: { record: 0.15, homeAway: 0.05, rest: 0.1, market: 0.25, form: 0.3, matchup: 0.15 },
+  KBO: { record: 0.28, homeAway: 0.1, rest: 0.05, market: 0.22, form: 0.2, matchup: 0.15 },
   DEFAULT: { record: 0.25, homeAway: 0.1, rest: 0.05, market: 0.25, form: 0.2, matchup: 0.15 }
 };
 
 function sportWeights(sport) {
-  const key = String(sport || "DEFAULT").toUpperCase();
-  return SPORT_WEIGHTS[key] || SPORT_WEIGHTS.DEFAULT;
+  return SPORT_WEIGHTS[String(sport || "DEFAULT").toUpperCase()] || SPORT_WEIGHTS.DEFAULT;
 }
 
 export function runMarketIntelligence(ctx = {}, modelProb = null) {
-  const openRaw = ctx.openPrice || ctx.openingLine || ctx.open || ctx.oddsOpen || null;
-  const currentRaw = ctx.price || ctx.currentPrice || ctx.odds || ctx.priceGuide || null;
+  const openRaw = ctx.openPrice || ctx.openingLine || ctx.open || null;
+  const currentRaw = ctx.price || ctx.currentPrice || ctx.odds || null;
   const openParsed = parseOddsToImplied(openRaw);
   const currentParsed = parseOddsToImplied(currentRaw);
   const hasOpen = openParsed.implied != null;
@@ -123,10 +109,7 @@ export function runMarketIntelligence(ctx = {}, modelProb = null) {
   if (modelProb != null && implied != null) {
     edge = Math.round((modelProb - implied) * 1000) / 10;
   }
-  let interpretation = !hasAnyMarket
-    ? "Market information unavailable — model stands alone; edge cannot be confirmed."
-    : "Current price observed; limited movement/public context from this feed.";
-  let valueAssessment =
+  const valueAssessment =
     edge == null
       ? "Cannot assess price value without odds."
       : edge >= 3
@@ -140,7 +123,6 @@ export function runMarketIntelligence(ctx = {}, modelProb = null) {
     "📈 MARKET SIGNAL",
     "• Opening: " + (hasOpen ? openParsed.oddsDisplay : "unavailable"),
     "• Current: " + (hasCurrent ? currentParsed.oddsDisplay : "unavailable"),
-    "• Movement: unavailable (single snapshot)",
     "• Model probability: " + (modelProb != null ? Math.round(modelProb * 100) + "%" : "unavailable"),
     "• Implied probability: " + (implied != null ? Math.round(implied * 100) + "%" : "unavailable"),
     "• Estimated edge: " + (edge != null ? (edge >= 0 ? "+" : "") + edge + "%" : "unavailable"),
@@ -148,71 +130,58 @@ export function runMarketIntelligence(ctx = {}, modelProb = null) {
   ].join("\n");
   return {
     available: hasAnyMarket,
-    opening: hasOpen ? openParsed.oddsDisplay : null,
-    current: hasCurrent ? currentParsed.oddsDisplay : null,
     oddsDisplay,
     implied,
     edge,
-    interpretation,
     valueAssessment,
     signalBlock,
-    modelProb: modelProb != null ? Math.round(modelProb * 1000) / 10 : null,
-    impliedProbPct: implied != null ? Math.round(implied * 100) : null
+    interpretation: hasAnyMarket
+      ? "Current price observed."
+      : "No market price — ranking by stats/media only."
   };
 }
 
-export function runWhatIfScenarios(preliminary, ctx = {}) {
+export function runWhatIfScenarios(preliminary) {
   const baseProb = preliminary.modelProb ?? 0.5;
   const scenarios = [];
   function shock(name, delta) {
     const newProb = clamp(baseProb + delta, 0.35, 0.78);
     scenarios.push({
       name,
-      ran: true,
       newProb: Math.round(newProb * 1000) / 10,
-      directionHeld: (baseProb >= 0.5 && newProb >= 0.5) || (baseProb < 0.5 && newProb < 0.5),
-      stillPlayable: newProb >= 0.52
+      stillPlayable: newProb >= 0.52,
+      directionHeld: (baseProb >= 0.5 && newProb >= 0.5) || (baseProb < 0.5 && newProb < 0.5)
     });
   }
   shock("Key player limited", -0.05);
   shock("Starter scratched", -0.07);
   shock("Lineup change", -0.04);
-  const fragile = scenarios.filter((s) => s.ran && !s.stillPlayable).length >= 2;
-  const sensitive = scenarios.filter((s) => s.ran && !s.directionHeld).length >= 1;
+  const fragile = scenarios.filter((s) => !s.stillPlayable).length >= 2;
+  const sensitive = scenarios.filter((s) => !s.directionHeld).length >= 1;
   const classification = fragile ? "FRAGILE" : sensitive ? "SENSITIVE" : "ROBUST";
   return {
     classification,
     scenarios,
     note:
       classification === "FRAGILE"
-        ? "Pick is fragile under stress — prefer NO PLAY or LEAN only."
+        ? "Fragile under stress."
         : classification === "SENSITIVE"
-          ? "Pick direction can flip under stress."
-          : "Pick holds under standard stress tests.",
-    block:
-      "🔬 WHAT-IF: " +
-      classification +
-      " — " +
-      (classification === "FRAGILE"
-        ? "Fragile under stress"
-        : classification === "SENSITIVE"
-          ? "Sensitive to key assumptions"
-          : "Holds under stress")
+          ? "Sensitive to key assumptions."
+          : "Holds under standard stress.",
+    block: "🔬 WHAT-IF: " + classification
   };
 }
 
-export function runPredictionAutopsy(preliminary, ctx = {}) {
+export function runPredictionAutopsy(preliminary) {
   const challenges = [];
   const redFlags = preliminary.redFlags || [];
-  if (redFlags.includes("Missing odds")) challenges.push("No market price — cannot validate value");
   if (redFlags.includes("Extremely small sample")) challenges.push("Sample thin");
   if (redFlags.includes("Injury uncertainty")) challenges.push("Injury status unresolved");
   if (redFlags.includes("Unknown starting lineup")) challenges.push("Starting lineup not confirmed");
-  if ((preliminary.modelProb || 0) < 0.53) challenges.push("Model probability below ideal LEAN bar");
-  if (preliminary.edge != null && preliminary.edge < 1) challenges.push("Edge below ideal minimum");
+  if ((preliminary.modelProb || 0) < 0.52) challenges.push("Model probability below LEAN bar");
   if ((preliminary.dataQuality || "Low") === "Low") challenges.push("Data quality low");
-  if (redFlags.includes("Conflicting statistics")) challenges.push("Conflicting indicators");
   const severity = challenges.length;
+  // Survived if not critically broken — missing odds alone does not fail autopsy
   const survived =
     severity < 3 &&
     (preliminary.modelProb || 0) >= 0.52 &&
@@ -222,17 +191,91 @@ export function runPredictionAutopsy(preliminary, ctx = {}) {
     topChallenge: challenges[0] || "No critical autopsy failure",
     severity,
     survived,
-    action: survived ? "PASS" : "NO_PLAY_OR_DOWNGRADE",
     verdict: survived
       ? "Survived adversarial review"
-      : "Failed adversarial review — insufficient evidence: " + (challenges[0] || "thin evidence")
+      : "Failed adversarial review: " + (challenges[0] || "thin evidence")
   };
 }
 
 /**
- * Core multi-stage evaluation.
- * Returns NO PLAY when evidence cannot support a selection.
+ * Build model probability from quantitative inputs when present.
  */
+function computeModelProb(ctx, weights, redFlags) {
+  let modelProb = 0.5;
+  const gap =
+    ctx.recordGap != null && Number.isFinite(Number(ctx.recordGap))
+      ? Number(ctx.recordGap)
+      : null;
+  const sidePct =
+    ctx.sidePct != null && Number.isFinite(Number(ctx.sidePct)) ? Number(ctx.sidePct) : null;
+
+  // Quantitative record gap (best signal from ESPN board)
+  if (gap != null) {
+    // gap 0.08 → ~0.54, gap 0.15 → ~0.58, gap 0.25 → ~0.63
+    modelProb = clamp(0.5 + gap * 0.55 * (weights.record / 0.25), 0.42, 0.66);
+  } else if (sidePct != null) {
+    modelProb = clamp(0.45 + sidePct * 0.2, 0.42, 0.62);
+  } else {
+    const supporting = String(ctx.supporting || "");
+    const form = String(ctx.form || "");
+    if (/stronger season record|holds stronger|clear edge|elite form|dominant/i.test(supporting + form))
+      modelProb = 0.58;
+    else if (/close season records|limited edge|close records/i.test(supporting + form))
+      modelProb = 0.52;
+    else if (/weak|cold|struggling|fade/i.test(supporting + form)) modelProb = 0.46;
+  }
+
+  const sport = String(ctx.sport || "").toUpperCase();
+  const situational = String(ctx.situational || "");
+  const form = String(ctx.form || "");
+  const missing = String(ctx.missing || "");
+
+  // Home bump when side is home and has positive gap
+  if (ctx.isHome && (gap == null || gap > 0)) {
+    modelProb += 0.02 * (weights.homeAway / 0.1);
+  }
+
+  if (sport === "NBA" || sport === "NHL") {
+    if (/back.?to.?back|B2B|short rest/i.test(situational + form + missing)) {
+      modelProb -= 0.03;
+      if (!redFlags.includes("Rest concern")) redFlags.push("Rest concern");
+    }
+  }
+  if (sport === "MLB" || sport === "KBO") {
+    if (/starting pitcher|SP TBA|pitcher TBA/i.test(missing + situational)) {
+      modelProb -= 0.03;
+      if (!redFlags.includes("Unknown starting lineup")) redFlags.push("Unknown starting lineup");
+    }
+  }
+  if (sport === "NHL") {
+    if (/goalie TBA|starting goalie unknown/i.test(missing + situational)) {
+      modelProb -= 0.03;
+      if (!redFlags.includes("Unknown starting lineup")) redFlags.push("Unknown starting lineup");
+    }
+  }
+
+  // Media agreement (soft, never sole basis for LOCK)
+  const media = String(ctx.media || ctx.mediaNote || "");
+  if (media && /agree|backs|on\s+this|media\s+lean|tout/i.test(media)) {
+    modelProb += 0.015;
+  } else if (media && /fade|against|opposite/i.test(media)) {
+    modelProb -= 0.02;
+  }
+
+  if (isThinSample(form + String(ctx.sampleNote || ""))) {
+    modelProb = 0.5 + (modelProb - 0.5) * 0.4;
+    if (!redFlags.includes("Extremely small sample")) redFlags.push("Extremely small sample");
+  }
+  if (redFlags.filter((f) => f !== "Missing odds").length >= 2) {
+    modelProb = clamp(modelProb - 0.035, 0.4, 0.65);
+  }
+  if (/injury/i.test(missing + String(ctx.opposing || ""))) {
+    modelProb = clamp(modelProb - 0.03, 0.4, 0.65);
+  }
+
+  return clamp(modelProb, 0.4, 0.68);
+}
+
 export function evaluateMatchup(ctx = {}) {
   const sport = (ctx.sport || "DEFAULT").toUpperCase();
   const weights = sportWeights(sport);
@@ -243,103 +286,67 @@ export function evaluateMatchup(ctx = {}) {
   const opposing = String(ctx.opposing || "");
   const sampleNote = String(ctx.sampleNote || "");
   const missing = String(ctx.missing || "");
+  const media = String(ctx.media || ctx.mediaNote || "");
 
   const hasNamed = !!(ctx.selection && ctx.selection !== "—" && ctx.game && ctx.game !== "—");
 
-  let modelProb = 0.5;
-  let recordSignal = 0;
-
-  if (/stronger season record|holds stronger|clear edge|elite form|dominant/i.test(supporting + form)) {
-    modelProb = 0.58;
-    recordSignal = 0.08;
-  } else if (/close season records|limited edge|close records/i.test(supporting + form)) {
-    modelProb = 0.52;
-    recordSignal = 0.02;
-  } else if (/weak|cold|struggling|fade/i.test(supporting + form)) {
-    modelProb = 0.46;
-    recordSignal = -0.04;
-  }
-
-  if (sport === "MLB" || sport === "NCAAF" || sport === "NFL") {
-    if (/home/i.test(situational) && recordSignal > 0) modelProb += 0.015 * weights.homeAway * 10;
-  }
-  if (sport === "NBA" || sport === "NHL") {
-    if (/back.?to.?back|B2B|short rest/i.test(situational + form + missing)) {
-      modelProb -= 0.03;
-      if (!redFlags.includes("Rest concern")) redFlags.push("Rest concern");
-    }
-  }
-  if (sport === "MLB") {
-    if (/starting pitcher|SP TBA|pitcher TBA/i.test(missing + situational)) {
-      modelProb -= 0.04;
-      if (!redFlags.includes("Unknown starting lineup")) redFlags.push("Unknown starting lineup");
-    }
-  }
-  if (sport === "NHL") {
-    if (/goalie TBA|starting goalie unknown/i.test(missing + situational)) {
-      modelProb -= 0.04;
-      if (!redFlags.includes("Unknown starting lineup")) redFlags.push("Unknown starting lineup");
-    }
-  }
-
-  if (isThinSample(form + sampleNote) || /thin sample/i.test(sampleNote)) {
-    modelProb = 0.5 + (modelProb - 0.5) * 0.35;
-    if (!redFlags.includes("Extremely small sample")) redFlags.push("Extremely small sample");
-  }
-  if (redFlags.length >= 2) modelProb = clamp(modelProb - 0.04, 0.4, 0.65);
-  if (/injury|lineup not|missing/i.test(missing + opposing)) {
-    modelProb = clamp(modelProb - 0.03, 0.4, 0.65);
-  }
-
-  modelProb = clamp(modelProb, 0.4, 0.68);
-
+  const modelProb = computeModelProb(ctx, weights, redFlags);
   const market = runMarketIntelligence(ctx, modelProb);
   const edge = market.edge;
   const implied = market.implied;
   const oddsDisplay = market.oddsDisplay;
 
+  // Data quality: stats-only can be Medium; +odds clean = High
   let dataQuality = "Low";
-  const hasForm = form.length > 10;
-  const hasSit = situational.length > 10;
-  const hasSupport = supporting.length > 10;
-  const availableCount = [hasForm, hasSit, hasSupport, market.available].filter(Boolean).length;
-  if (availableCount >= 3 && !redFlags.includes("Extremely small sample")) dataQuality = "Medium";
-  if (availableCount >= 3 && market.available && redFlags.length === 0) dataQuality = "High";
+  const hasForm = form.length > 8;
+  const hasSupport = supporting.length > 8 || (ctx.recordGap != null && Math.abs(ctx.recordGap) >= 0.05);
+  const thin = redFlags.includes("Extremely small sample");
+  if (hasForm && hasSupport && !thin) dataQuality = "Medium";
+  if (hasForm && hasSupport && market.available && !thin && redFlags.filter((f) => f !== "Missing odds").length === 0)
+    dataQuality = "High";
 
   const preliminary = { modelProb, edge, redFlags, dataQuality, sport, form, situational };
+  const whatIf = runWhatIfScenarios(preliminary);
+  const autopsy = runPredictionAutopsy(preliminary);
 
-  const whatIf = runWhatIfScenarios(preliminary, ctx);
-  const autopsy = runPredictionAutopsy({ ...preliminary, edge }, ctx);
+  const hardCritical = redFlags.filter((f) =>
+    /Injury uncertainty|Unknown starting lineup|Extremely small sample|Insufficient historical data/i.test(f)
+  );
 
   let playLevel = "NO PLAY";
   let playEmoji = "🔴";
-  let forced = false;
-
-  const criticalFlags = redFlags.filter((f) =>
-    /Injury uncertainty|Unknown starting lineup|Extremely small sample|Missing odds|Insufficient historical data/i.test(
-      f
-    )
-  );
 
   if (!hasNamed) {
     playLevel = "NO PLAY";
-    playEmoji = "🔴";
   } else if (
     modelProb >= 0.57 &&
-    (edge == null || edge >= 3.5) &&
+    market.available &&
+    edge != null &&
+    edge >= 3.0 &&
     dataQuality !== "Low" &&
     autopsy.survived &&
     whatIf.classification !== "FRAGILE" &&
-    criticalFlags.length === 0
+    hardCritical.length === 0
   ) {
     playLevel = "STRONG PLAY";
     playEmoji = "🟢";
   } else if (
-    modelProb >= 0.53 &&
-    (edge == null || edge >= 1.0) &&
+    modelProb >= 0.535 &&
     dataQuality !== "Low" &&
     autopsy.survived &&
-    criticalFlags.length <= 1
+    hardCritical.length === 0 &&
+    // LEAN: allow null edge (stats-only) OR edge >= 0.5
+    (edge == null || edge >= 0.5)
+  ) {
+    playLevel = "LEAN";
+    playEmoji = "🟡";
+  } else if (
+    // Secondary LEAN: large record gap + medium data even if autopsy soft
+    modelProb >= 0.55 &&
+    ctx.recordGap != null &&
+    Number(ctx.recordGap) >= 0.1 &&
+    !thin &&
+    hardCritical.length === 0
   ) {
     playLevel = "LEAN";
     playEmoji = "🟡";
@@ -349,23 +356,27 @@ export function evaluateMatchup(ctx = {}) {
   }
 
   const top3 = [];
-  if (supporting) top3.push(supporting.slice(0, 120));
-  if (form) top3.push("Form/records: " + form.slice(0, 100));
-  if (market.available && edge != null) {
-    top3.push("Market edge: " + (edge >= 0 ? "+" : "") + edge + "% at " + oddsDisplay);
+  if (ctx.recordGap != null && Number.isFinite(Number(ctx.recordGap))) {
+    top3.push(
+      `Record gap ${(Number(ctx.recordGap) * 100).toFixed(0)} pts win% · side ${ctx.sidePct != null ? (Number(ctx.sidePct) * 100).toFixed(0) + "%" : "—"}`
+    );
   }
+  if (supporting) top3.push(supporting.slice(0, 120));
+  if (form) top3.push("Form: " + form.slice(0, 100));
+  if (market.available && edge != null)
+    top3.push("Market edge: " + (edge >= 0 ? "+" : "") + edge + "% at " + oddsDisplay);
+  if (media) top3.push("Media: " + media.slice(0, 100));
   while (top3.length < 3) {
     top3.push(
-      top3.length === 0
-        ? playLevel === "NO PLAY"
-          ? "Insufficient verified data for a supported side"
-          : "Best available side from current board"
-        : "Data gaps remain on injuries/lineups/market depth"
+      playLevel === "NO PLAY"
+        ? "Insufficient verified statistical support"
+        : "Best available side from current verified board"
     );
   }
 
   const biggestRisk =
-    redFlags[0] ||
+    hardCritical[0] ||
+    redFlags.find((f) => f !== "Missing odds") ||
     autopsy.topChallenge ||
     (missing ? missing.slice(0, 100) : "Unverified injuries / lineups / market depth");
 
@@ -377,7 +388,7 @@ export function evaluateMatchup(ctx = {}) {
     edge,
     playLevel,
     playEmoji,
-    forced,
+    forced: false,
     dataQuality,
     redFlags,
     top3: top3.slice(0, 3),
@@ -398,34 +409,31 @@ export function evaluateMatchup(ctx = {}) {
     projection: playLevel + " on " + (ctx.selection || "—") + " @ " + oddsDisplay,
     createdAt: new Date().toISOString(),
     lastVerified: new Date().toISOString(),
-    dataStatus: market.available ? "ESPN + odds snapshot" : "ESPN only (no live odds)"
+    dataStatus: market.available
+      ? "ESPN stats + odds"
+      : media
+        ? "ESPN stats + media signal"
+        : "ESPN stats only"
   };
 }
 
 export function scoreConfidence() {
   return { level: "MEDIUM" };
 }
-
 export function buildEvidenceAnalysis(ctx) {
   return evaluateMatchup(ctx);
 }
-
 export function stressTestPick(ctx) {
   const ev = evaluateMatchup(ctx);
   return { survived: ev.autopsySurvived, classification: ev.whatIfClassification, ev };
 }
-
 export function formatAnalysisDiscord(r) {
   if (!r) return "No analysis.";
   return [
     r.playEmoji + " " + r.playLevel,
     "Model: " + r.probabilityPct + "% · Edge: " + (r.edge != null ? r.edge + "%" : "n/a"),
-    "Data: " + r.dataQuality + " · " + (r.dataStatus || ""),
-    r.autopsyVerdict ? "Autopsy: " + r.autopsyVerdict : null
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "Data: " + r.dataQuality + " · " + (r.dataStatus || "")
+  ].join("\n");
 }
-
 export const ANALYTICS_FOOTER =
-  "EDGE PLAY · evidence-first · NO PLAY when data is thin · LOCK only when evidence is strong · 21+";
+  "EDGE PLAY · stats + market + media when available · NO PLAY when thin · 21+";
