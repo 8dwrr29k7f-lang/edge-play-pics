@@ -1,13 +1,15 @@
 {
   "name": "edge-play-pics",
-  "version": "4.5.0",
+  "version": "4.6.0",
   "description": "EDGE PLAY PICS — Discord sports desk · stats + media category engine",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "sh start.sh",
     "register": "node src/register-commands.js",
-    "dev": "node src/index.js"
+    "dev": "node src/index.js",
+    "test": "node src/selftest.js",
+    "selftest": "node src/selftest.js"
   },
   "engines": {
     "node": ">=18"
