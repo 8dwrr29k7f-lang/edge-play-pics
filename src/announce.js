@@ -62,11 +62,12 @@ export async function morningBundle() {
   dedupe.morningPosted = key;
   saveDedupe(dedupe);
 
+  const waiting = !!board.emptyBoard;
   const e = new EmbedBuilder()
-    .setColor(board.noPlay ? 0xe74c3c : 0x2ecc71)
-    .setTitle(board.noPlay ? "🌅 DAILY SCAN · NO QUALIFYING PLAY" : "🌅 DAILY SCAN · BOARD LIVE")
+    .setColor(waiting ? 0x95a5a6 : 0x2ecc71)
+    .setTitle(waiting ? "🌅 DAILY SCAN · WAITING FOR GAMES" : "🌅 DAILY SCAN · BOARD LIVE")
     .setDescription((board.text || "Scan complete.").slice(0, 4000))
-    .setFooter({ text: "EDGE PLAY · process guarantee only · 21+" })
+    .setFooter({ text: "EDGE PLAY · always publishes best available play · 21+" })
     .setTimestamp();
   return [{ embeds: [e] }];
 }
@@ -131,7 +132,6 @@ export async function runChangeAnnounce() {
 }
 
 export function initSnapshotIfEmpty() {
-  // ensure data dir exists
   try {
     fs.mkdirSync(path.dirname(DEDUPE_PATH), { recursive: true });
   } catch {}
