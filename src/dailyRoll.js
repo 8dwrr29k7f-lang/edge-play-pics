@@ -1,7 +1,7 @@
 /**
  * Daily auto card — wires dailyEngine into desk state
  * Single path: pipeline → validate → desk memory → Discord consumers
- * Always surfaces best available play on LOTD / liveCard when games exist.
+ * Evidence-first: NO PLAY / empty board when evidence is insufficient.
  */
 import { runDailyPipeline, getCurrentBoard } from "./dailyEngine.js";
 import { lockOfTheDay, liveCard } from "./data/desk.js";
@@ -27,7 +27,7 @@ function toDeskPick(p, tier) {
     autopsySurvived: p.autopsySurvived,
     playLevel: p.playLevel,
     status: p.status,
-    forced: !!p.forced,
+    forced: false,
     analysis: {
       form: p.form,
       situational: p.situational,
@@ -40,7 +40,8 @@ function toDeskPick(p, tier) {
     sampleNote: p.sampleNote,
     missing: p.missing,
     analyzedAt: p.analyzedAt,
-    lastVerified: p.lastVerified
+    lastVerified: p.lastVerified,
+    dataStatus: p.dataStatus
   };
 }
 
@@ -51,13 +52,13 @@ function setLotd(top, stamp) {
   lockOfTheDay.odds = top.price;
   lockOfTheDay.priceGuide = top.price;
   lockOfTheDay.units = top.tier === "LOCK" ? 1 : 0.5;
-  lockOfTheDay.why = (top.top3 || []).join("; ") || (top.forced ? "Best available side on the board" : "");
+  lockOfTheDay.why = (top.top3 || []).join("; ") || "";
   lockOfTheDay.match = top.game;
   lockOfTheDay.game = top.game;
   lockOfTheDay.modelProb = top.modelProb;
   lockOfTheDay.probabilityPct = top.probabilityPct;
   lockOfTheDay.edge = top.edge;
-  lockOfTheDay.forced = !!top.forced;
+  lockOfTheDay.forced = false;
   lockOfTheDay.analysis = {
     form: top.form,
     situational: top.situational,
@@ -66,6 +67,17 @@ function setLotd(top, stamp) {
     missing: top.missing
   };
   lockOfTheDay.date = stamp;
+}
+
+function clearLotd() {
+  lockOfTheDay.selection = "";
+  lockOfTheDay.pick = "";
+  lockOfTheDay.why = "NO PLAY — insufficient verified evidence";
+  lockOfTheDay.odds = "";
+  lockOfTheDay.edge = null;
+  lockOfTheDay.forced = false;
+  lockOfTheDay.modelProb = null;
+  lockOfTheDay.probabilityPct = null;
 }
 
 export async function rollDailyCard({ force = false } = {}) {
@@ -90,19 +102,14 @@ export async function rollDailyCard({ force = false } = {}) {
     if (head) {
       setLotd(head, board.stamp);
     } else {
-      lockOfTheDay.selection = "";
-      lockOfTheDay.pick = "";
-      lockOfTheDay.why = "Waiting for live games on ESPN boards";
-      lockOfTheDay.odds = "";
-      lockOfTheDay.edge = null;
-      lockOfTheDay.forced = false;
+      clearLotd();
     }
 
     return board;
   } catch (e) {
     console.error("rollDailyCard:", e.message);
     return {
-      noPlay: false,
+      noPlay: true,
       emptyBoard: true,
       text: "📡 Scan failed — " + e.message + "\nWill retry on next schedule or /scan.",
       error: e.message,
@@ -123,6 +130,7 @@ export async function ensureTodayCard() {
       ];
       const head = board.topPlays?.[0] || board.leans?.[0];
       if (head) setLotd(head, board.stamp);
+      else clearLotd();
     }
     return board;
   }
