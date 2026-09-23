@@ -1,28 +1,19 @@
-/** Standardized pick card — every lock/pick */
-export function parseOddsToImplied(price) {
-  if (price == null || price === "—" || price === "")
-    return { implied: null, oddsDisplay: "—", source: "none" };
-  const s = String(price).trim();
-  const cent = s.match(/(\d{1,3})\s*¢/);
-  if (cent) {
-    const c = Math.min(99, Math.max(1, Number(cent[1])));
-    return { implied: c / 100, oddsDisplay: c + "¢ Kalshi", source: "kalshi_cent" };
-  }
-  const am = s.match(/([+-]?\d{3,4})/);
-  if (am) {
-    const n = Number(am[1]);
-    const implied = n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
-    return { implied, oddsDisplay: n > 0 ? "+" + n : String(n), source: "american" };
-  }
-  const band = s.match(/(\d{1,3})\s*[–-]\s*(\d{1,3})\s*¢/);
-  if (band) {
-    const mid = (Number(band[1]) + Number(band[2])) / 2;
-    return { implied: mid / 100, oddsDisplay: band[1] + "–" + band[2] + "¢ band", source: "kalshi_band" };
-  }
-  return { implied: null, oddsDisplay: s.slice(0, 40), source: "unparsed" };
-}
+/**
+ * Standardized pick card — every prediction uses the same transparent format.
+ * Driven by the multi-factor analytics engine.
+ * NEVER forces a LOCK. Outcomes: STRONG PLAY / LEAN / NO PLAY.
+ */
+
+import {
+  evaluateMatchup,
+  parseOddsToImplied,
+  buildEvidenceAnalysis
+} from "./analyticsEngine.js";
+
+export { parseOddsToImplied };
 
 export function estimateModelProb(tier, sport, hasNamedGame) {
+  // Legacy fallback only — real model lives in evaluateMatchup
   if (!hasNamedGame) return null;
   const t = (tier || "").toUpperCase();
   if (t === "LOCK" || t === "CAP") return 0.58;
@@ -47,90 +38,212 @@ export function confidencePct(modelProb, confLevel) {
   return pct;
 }
 
+/**
+ * Core standardization — runs the full multi-factor engine.
+ */
 export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) {
   if (!p) {
-    return { noPick: true, reason: "No pick object", finalLine: "🚫 FINAL PICK: NO PICK\nREASON: Missing pick data." };
+    return {
+      noPick: true,
+      reason: "No pick object",
+      finalLine: formatNoPlay("Missing pick data.")
+    };
   }
-  const selection = (p.selection || p.pick || "").replace(/^👑\s*LOCK OF THE DAY\s*·\s*/i, "").trim();
+
+  const selection = (p.selection || p.pick || "")
+    .replace(/^👑\s*LOCK OF THE DAY\s*·\s*/i, "")
+    .trim();
   const game = p.game || p.match || p.event || "—";
   const sport = p.sport || "—";
   const tier = (p.tier || "LEAN").toUpperCase();
-  const price = p.price || p.priceGuide || "—";
+  const price = p.price || p.priceGuide || p.odds || "—";
   const units = p.units ?? 0;
-  if (!selection || /process side|soft-side|confirmed sp side|lineup-confirmed|wait sp|board scan|shop day|no forced/i.test(selection)) {
-    return { noPick: true, reason: "Not a specific named pick", finalLine: "🚫 FINAL PICK: NO PICK\nREASON: No specific team/player market — run `/daily`." };
+
+  // Hard rejects before engine
+  if (
+    !selection ||
+    /process side|soft-side|confirmed sp side|lineup-confirmed|wait sp|board scan|shop day|no forced/i.test(
+      selection
+    )
+  ) {
+    return {
+      noPick: true,
+      reason: "Not a specific named pick",
+      finalLine: formatNoPlay("No specific team/player market — run `/daily`.")
+    };
   }
   if (p.final || /FINAL|Postponed| — OFF| — FINAL/i.test(game + selection)) {
-    return { noPick: true, reason: "Final or postponed", finalLine: "🚫 FINAL PICK: NO PICK\nREASON: Game is final or postponed." };
+    return {
+      noPick: true,
+      reason: "Final or postponed",
+      finalLine: formatNoPlay("Game is final or postponed.")
+    };
   }
-  const { implied, oddsDisplay } = parseOddsToImplied(price);
-  const hasNamed = !!(game && game !== "—" && selection);
-  const modelProb = estimateModelProb(tier, sport, hasNamed);
-  const edge = modelProb != null && implied != null ? modelProb - implied : null;
-  const r = p.reasoning || p.analysis || {};
-  const confLevel = r.confidence || (tier === "LOCK" || tier === "VALUE" ? "MEDIUM" : "LOW");
-  const sampleThin = /small|thin|one week|postponed/i.test((r.sampleNote || r.form || "") + game);
-  const risk = riskFromEdge(edge, confLevel, sampleThin);
-  const confPct = confidencePct(modelProb, confLevel);
-  const freshness = dataFreshness || (p.live ? "LIVE board status (ESPN public)" : "Latest ESPN schedule pull — not a live odds feed");
-  const whyList = [r.form, r.situational, r.number, r.supporting, r.decision].filter(Boolean);
-  const risks = [r.kill, r.stressFail, r.opposing, r.bothSides, r.missing].filter(Boolean).slice(0, 4);
-  const finalLine =
-    modelProb == null
-      ? "🚫 FINAL PICK: NO PICK\nREASON: Insufficient model inputs for " + selection + "."
-      : "🎯 FINAL PICK: " + selection + "\n📊 MODEL PROBABILITY: " + confPct + "%\n💰 ODDS: " + oddsDisplay + "\n📈 EDGE: " + (edge != null ? (edge >= 0 ? "+" : "") + (edge * 100).toFixed(1) + "%" : "n/a") + "\n⚠️ RISK: " + risk;
+
+  // Build context for the engine from whatever the desk supplies
+  const reasoning = p.reasoning || p.analysis || {};
+  const ctx = {
+    sport,
+    selection,
+    game,
+    price,
+    tier,
+    units,
+    form: reasoning.form || p.form,
+    situational: reasoning.situational || p.situational,
+    supporting: reasoning.supporting || p.supporting,
+    opposing: reasoning.opposing || reasoning.bothSides || p.opposing,
+    bothSides: reasoning.bothSides,
+    sampleNote: reasoning.sampleNote || p.sampleNote,
+    missing: reasoning.missing || p.missing,
+    kill: reasoning.kill || p.kill,
+    stressFail: reasoning.stressFail,
+    facts: reasoning.facts || p.facts,
+    media: reasoning.media || p.media,
+    notes: p.why || p.note,
+    signals: p.signals || reasoning.signals,
+    allowNoOdds: false
+  };
+
+  const ev = evaluateMatchup(ctx);
+
+  // Map engine output → standardized card
+  const noPlay = ev.playLevel === "NO PLAY";
+
+  const finalBlock = noPlay
+    ? formatNoPlay(
+        ev.redFlags.length
+          ? `Red flags: ${ev.redFlags.slice(0, 2).join("; ")}`
+          : ev.dataQuality === "Low"
+            ? "Insufficient verified data coverage."
+            : "Model probability / edge below threshold for a play."
+      )
+    : [
+        "━━━━━━━━━━━━━━━━",
+        `🎯 PICK: ${selection}`,
+        `📊 PROBABILITY: ${ev.probabilityPct}%`,
+        `💰 ODDS: ${ev.oddsDisplay}`,
+        `📈 EDGE: ${ev.edge != null ? (ev.edge >= 0 ? "+" : "") + ev.edge + "%" : "n/a"}`,
+        `${ev.playEmoji} PLAY LEVEL: ${ev.playLevel}`,
+        "━━━━━━━━━━━━━━━━",
+        "",
+        "🔥 TOP 3 REASONS",
+        `• ${ev.top3[0]}`,
+        `• ${ev.top3[1]}`,
+        `• ${ev.top3[2]}`,
+        "",
+        "⚠️ BIGGEST RISK",
+        `• ${ev.biggestRisk}`,
+        "",
+        `📊 DATA QUALITY: ${ev.dataQuality}`,
+        ev.modelAgreement ? `🤖 MODEL AGREEMENT: ${ev.modelAgreement}` : null,
+        "",
+        "FINAL:",
+        noPlay
+          ? `No actionable edge on ${selection} — pass.`
+          : `${ev.playEmoji} ${ev.playLevel} on ${selection} at ${ev.oddsDisplay} (model ${ev.probabilityPct}%, edge ${ev.edge != null ? (ev.edge >= 0 ? "+" : "") + ev.edge + "%" : "n/a"}).`
+      ]
+        .filter((x) => x != null)
+        .join("\n");
+
+  const freshness =
+    dataFreshness ||
+    (p.live ? "LIVE board status (ESPN public)" : "Latest schedule / desk pull — not a live odds feed");
+
   return {
-    noPick: false, sport, game, selection, pickLine: "PICK: " + selection, tier, units,
-    confidencePct: confPct, confidenceLevel: confLevel, oddsDisplay,
-    impliedProb: implied != null ? Math.round(implied * 1000) / 10 : null,
-    modelProb: modelProb != null ? Math.round(modelProb * 1000) / 10 : null,
-    edge: edge != null ? Math.round(edge * 1000) / 10 : null,
-    risk, dataFreshness: freshness,
-    analysis: r.projection || r.decision || p.why || "Process rank on named ESPN game.",
-    keyStats: [r.form && "Form/context: " + r.form, r.situational && "Spot: " + r.situational, r.facts && "Facts: " + r.facts].filter(Boolean),
-    whyThis: whyList.slice(0, 5),
-    risks: risks.length ? risks : ["Injury / lineup change", "Closing line moves against you"],
-    finalLine, reasoning: r
+    noPick: noPlay,
+    reason: noPlay ? "Engine returned NO PLAY" : null,
+    sport,
+    game,
+    selection,
+    pickLine: "PICK: " + selection,
+    tier: ev.playLevel, // override legacy LOCK with honest level
+    units: noPlay ? 0 : units,
+    confidencePct: ev.probabilityPct,
+    confidenceLevel: ev.confidence,
+    oddsDisplay: ev.oddsDisplay,
+    impliedProb: ev.implied != null ? Math.round(ev.implied * 1000) / 10 : null,
+    modelProb: Math.round(ev.modelProb * 1000) / 10,
+    edge: ev.edge,
+    risk: ev.redFlags.length ? "High" : ev.dataQuality === "High" ? "Medium" : "High",
+    dataFreshness: freshness,
+    dataQuality: ev.dataQuality,
+    playLevel: ev.playLevel,
+    playEmoji: ev.playEmoji,
+    analysis: ev.projection,
+    keyStats: [
+      ev.form && "Form: " + ev.form,
+      ev.situational && "Spot: " + ev.situational,
+      ev.facts && "Facts: " + ev.facts
+    ].filter(Boolean),
+    whyThis: ev.top3,
+    risks: [ev.biggestRisk, ...(ev.redFlags || [])].filter(Boolean).slice(0, 4),
+    top3: ev.top3,
+    biggestRisk: ev.biggestRisk,
+    modelAgreement: ev.modelAgreement,
+    redFlags: ev.redFlags,
+    finalLine: finalBlock,
+    reasoning: ev
   };
 }
 
-export function formatStandardDiscord(std, { compact = false } = {}) {
-  if (!std || std.noPick) return (std && std.finalLine) || "🚫 FINAL PICK: NO PICK\nREASON: Insufficient reliable data.";
-  if (compact) {
-    return "🏆 **" + std.pickLine + "**\n📊 Conf **" + (std.confidencePct ?? "—") + "%** · 💰 " + std.oddsDisplay + " · 📈 Edge " + (std.edge != null ? (std.edge >= 0 ? "+" : "") + std.edge + "%" : "n/a") + " · 🔥 " + std.risk + "\n🎯 **" + std.selection + "** · " + std.units + "u";
-  }
+function formatNoPlay(reason) {
   return [
-    "🏆 **" + std.pickLine + "**",
-    "📊 **CONFIDENCE:** " + (std.confidencePct ?? "—") + "% (" + std.confidenceLevel + ")",
-    "💰 **ODDS:** " + std.oddsDisplay,
-    "📈 **IMPLIED PROB:** " + (std.impliedProb != null ? std.impliedProb + "%" : "n/a"),
-    "📊 **MODEL PROB:** " + (std.modelProb != null ? std.modelProb + "%" : "n/a"),
-    "📉 **EDGE:** " + (std.edge != null ? (std.edge >= 0 ? "+" : "") + std.edge + "%" : "n/a"),
-    "🔥 **RISK:** " + std.risk,
-    "⏱️ **DATA:** " + std.dataFreshness,
+    "━━━━━━━━━━━━━━━━",
+    "🎯 PICK: —",
+    "📊 PROBABILITY: —",
+    "💰 ODDS: —",
+    "📈 EDGE: —",
+    "🔴 PLAY LEVEL: NO PLAY",
+    "━━━━━━━━━━━━━━━━",
     "",
-    "**ANALYSIS**", std.analysis,
+    "🔥 TOP 3 REASONS",
+    "• Insufficient verified statistical support",
+    "• Data quality or sample size inadequate",
+    "• Engine refuses to force a lock",
     "",
-    "**KEY STATS**",
-    ...(std.keyStats.length ? std.keyStats.map((s) => "• " + s) : ["• Board matchup only"]),
+    "⚠️ BIGGEST RISK",
+    `• ${reason}`,
     "",
-    "**WHY THIS PICK**",
-    ...std.whyThis.slice(0, 5).map((s, i) => i + 1 + ". " + s),
+    "📊 DATA QUALITY: Low",
     "",
-    "**RISKS**",
-    ...std.risks.map((s) => "• " + s),
-    "", std.finalLine
+    "FINAL:",
+    `No play — ${reason}`
   ].join("\n");
 }
 
+export function formatStandardDiscord(std, { compact = false } = {}) {
+  if (!std) return formatNoPlay("Insufficient reliable data.");
+  if (std.noPick) return std.finalLine || formatNoPlay(std.reason || "Insufficient reliable data.");
+
+  if (compact) {
+    return [
+      `${std.playEmoji || "🎯"} **${std.selection}**`,
+      `📊 ${std.confidencePct ?? "—"}% · 💰 ${std.oddsDisplay} · 📈 ${std.edge != null ? (std.edge >= 0 ? "+" : "") + std.edge + "%" : "n/a"}`,
+      `${std.playEmoji} ${std.playLevel} · ${std.units}u · DQ ${std.dataQuality}`
+    ].join("\n");
+  }
+
+  // Full card already built by standardizePick
+  return std.finalLine;
+}
+
 export function formatParlayDiscord(legs) {
-  if (!legs?.length) return "🚫 FINAL PICK: NO PICK\nREASON: No valid legs.";
+  if (!legs?.length) return formatNoPlay("No valid legs.");
   const parts = legs.map((L, i) => {
     const std = standardizePick(L);
-    if (std.noPick) return "**Leg " + (i + 1) + ":** NO PICK — " + std.reason;
-    return "**Leg " + (i + 1) + ": " + std.selection + "** — model " + std.modelProb + "% · edge " + (std.edge != null ? std.edge + "%" : "n/a") + "\n_" + std.analysis + "_";
+    if (std.noPick) return `**Leg ${i + 1}:** 🔴 NO PLAY — ${std.reason || "engine reject"}`;
+    return `**Leg ${i + 1}: ${std.selection}** — model ${std.modelProb}% · edge ${std.edge != null ? std.edge + "%" : "n/a"} · ${std.playEmoji} ${std.playLevel}`;
   });
-  const probs = legs.map((L) => standardizePick(L).modelProb).filter((x) => x != null).map((x) => x / 100);
+  const probs = legs
+    .map((L) => standardizePick(L).modelProb)
+    .filter((x) => x != null)
+    .map((x) => x / 100);
   const combined = probs.length ? probs.reduce((a, b) => a * b, 1) : null;
-  return parts.join("\n\n") + "\n\n**Combined est. probability:** " + (combined != null ? (combined * 100).toFixed(1) + "%" : "n/a") + "\n_Combining legs increases uncertainty._";
+  return (
+    parts.join("\n\n") +
+    "\n\n**Combined est. probability:** " +
+    (combined != null ? (combined * 100).toFixed(1) + "%" : "n/a") +
+    "\n_Combining legs multiplies uncertainty. Prefer single plays._"
+  );
 }
