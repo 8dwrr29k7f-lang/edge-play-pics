@@ -37,21 +37,28 @@ function mediaFields(list) {
 
 export function wireEmbed() {
   const e = base(colors.gold)
-    .setTitle(wireBoard.title)
-    .setDescription(wireBoard.description);
-  for (const t of wireBoard.takes) {
+    .setTitle(wireBoard.title || "⚡ WIRE")
+    .setDescription(wireBoard.description || "Live wire board");
+  for (const t of wireBoard.takes || []) {
     e.addFields({ name: t.name, value: t.value, inline: false });
   }
   for (const f of mediaFields(wireBoard.mediaLocks)) e.addFields(f);
+  if (!(wireBoard.takes || []).length) {
+    e.addFields({
+      name: "Board",
+      value: "Empty wire — run `/daily` to populate from live ESPN scan.",
+      inline: false
+    });
+  }
   return e;
 }
 
 export function kboEmbed() {
   const e = base(colors.take)
     .setTitle("🌅 KBO · WHAT TO TAKE")
-    .setDescription(`**${kboBoard.dateLabel}**\n${kboBoard.description}`);
+    .setDescription(`**${kboBoard.dateLabel || "KBO"}**\n${kboBoard.description || ""}`);
 
-  for (const r of kboBoard.rows) {
+  for (const r of kboBoard.rows || []) {
     e.addFields({
       name: `${tierIcon(r.action)} ${r.action} · ${r.game}`,
       value: `**${r.side}**\n${r.why}`,
@@ -62,25 +69,25 @@ export function kboEmbed() {
   e.addFields(
     {
       name: "📊 Pitchers / stats",
-      value: kboBoard.pitchers.map((p) => `• ${p}`).join("\n"),
+      value: (kboBoard.pitchers || []).map((p) => `• ${p}`).join("\n") || "—",
       inline: false
     },
     {
       name: "📡 Media notes",
-      value: kboBoard.media.map((m) => `• ${m}`).join("\n"),
+      value: (kboBoard.media || []).map((m) => `• ${m}`).join("\n") || "—",
       inline: false
     },
     ...mediaFields(kboBoard.mediaLocks)
   );
-  e.setFooter({ text: kboBoard.footer + " · 21+" });
+  e.setFooter({ text: (kboBoard.footer || "KBO desk") + " · 21+" });
   return e;
 }
 
 export function tennisEmbed() {
   const e = base(colors.lean)
-    .setTitle(tennisBoard.title)
-    .setDescription(tennisBoard.description);
-  for (const t of tennisBoard.takes) {
+    .setTitle(tennisBoard.title || "🎾 TENNIS")
+    .setDescription(tennisBoard.description || "No strong edges");
+  for (const t of tennisBoard.takes || []) {
     e.addFields({ name: t.name, value: t.value, inline: false });
   }
   for (const f of mediaFields(tennisBoard.mediaLocks)) e.addFields(f);
@@ -90,7 +97,7 @@ export function tennisEmbed() {
 export function limitsEmbed() {
   return base(colors.sit)
     .setTitle("🛑 LIMITS · Size by action")
-    .setDescription(limitsText);
+    .setDescription(limitsText || "Max 2 tickets · size by tier");
 }
 
 export function kalshiEmbed() {
@@ -113,7 +120,7 @@ export function scoresEmbed(lines, status) {
   const e = base(colors.navy)
     .setTitle("📺 LIVE SCORES · MLB")
     .setDescription(status || "Live feed");
-  if (!lines.length) {
+  if (!lines?.length) {
     e.addFields({ name: "Feed", value: "No games or feed blocked.", inline: false });
     return e;
   }
@@ -130,13 +137,25 @@ export function helpEmbed() {
     .setTitle("👑 EDGE PLAY PICS · THE DESK")
     .setDescription(
       [
-        "**Auto every day** — 7am CT new card · live scan every SCAN_MINUTES",
-        "`/daily` — force roll today's picks from ESPN",
-        "`/lotd` `/locks` `/lean` `/hold` `/live` `/hedge`",
-        "`/media` `/follow` `/updates` `/cashout`",
-        "`/track` `/logpick` `/grade` `/review` `/learn`",
-        "`/scores` `/status`",
+        "**Daily automation (America/Chicago)**",
+        "· 08:00 — full scan + board",
+        "· 12:00 / 16:00 — monitor + stale check",
+        "· 20:00 — evening review",
+        "· every SCAN_MINUTES — light reverify",
         "",
+        "**Core**",
+        "`/daily` `/scan` — ESPN evidence board",
+        "`/lotd` `/locks` `/best` `/live` — process cards",
+        "`/status` — system health",
+        "",
+        "**Tracker**",
+        "`/track` `/pending` `/logpick` `/grade` `/review` `/learn`",
+        "",
+        "**Desk**",
+        "`/lean` `/hold` `/media` `/hedge` `/limits` `/scores`",
+        "`/mlb` `/nfl` `/nba` … sport desks",
+        "",
+        "Engine never forces a LOCK. NO PLAY is valid.",
         "21+ · 1-800-GAMBLER"
       ].join("\n")
     );
