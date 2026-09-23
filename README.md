@@ -1,10 +1,10 @@
-# EDGE PLAY PICS v4.4
+# EDGE PLAY PICS v4.6
 
 Discord sports desk bot — **evidence-first daily analytics engine**.
 
 ## Process guarantee (never outcomes)
 
-- Daily scan of MLB / NFL / NBA / NHL / NCAAF via public ESPN feeds
+- Daily scan of MLB / NFL / NBA / NHL / NCAAF / Soccer / Tennis / KBO via public ESPN feeds (single feeds module)
 - Multi-factor engine: model · edge · data quality · what-if · autopsy
 - **LOCK only** when strict thresholds pass — otherwise **LEAN** or **NO PLAY**
 - **NO PLAY preferred** over inventing confidence when data is thin
@@ -48,6 +48,14 @@ Discord sports desk bot — **evidence-first daily analytics engine**.
 6. Slash commands register on boot when `CLIENT_ID` (+ optional `GUILD_ID`) are set
 
 `src/` is the source of truth. Boot only applies safe overlays (`config`, `mediaFollow`, `categoryEmbed`) — engine/handlers are **not** overwritten.
+
+## Tests
+
+```bash
+npm test   # or: node src/selftest.js
+```
+
+17 automated checks: odds math, NO-PLAY policy, feeds consistency, validation gate, tracker.
 
 ## Architecture
 
