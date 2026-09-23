@@ -1,14 +1,16 @@
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import { config } from "./config.js";
+import { CATEGORY_REGISTRY } from "./categoryRegistry.js";
 
-const sportCmds = [
-  ["kbo", "KBO desk"], ["npb", "NPB desk"], ["tennis", "Tennis desk"],
-  ["soccer", "Soccer desk"], ["mma", "MMA desk"], ["boxing", "Boxing desk"],
-  ["mlb", "MLB desk"], ["nfl", "NFL desk"], ["nba", "NBA desk"],
-  ["esports", "Esports desk"], ["kalshi", "Kalshi desk"]
-];
+function sportCmdsFromRegistry() {
+  return Object.values(CATEGORY_REGISTRY).map((c) => [
+    c.key,
+    `${c.label} desk — live pipeline`
+  ]);
+}
 
 function buildCommands() {
+  const sportCmds = sportCmdsFromRegistry();
   return [
     new SlashCommandBuilder().setName("pics").setDescription("Main premium board"),
     new SlashCommandBuilder().setName("wire").setDescription("Main board"),
@@ -24,13 +26,13 @@ function buildCommands() {
     new SlashCommandBuilder().setName("lotd").setDescription("Play of the Day"),
     new SlashCommandBuilder().setName("lock").setDescription("Play of the Day alias"),
     new SlashCommandBuilder().setName("live").setDescription("Live card all picks"),
-    new SlashCommandBuilder().setName("best").setDescription("Best bets"),
+    new SlashCommandBuilder().setName("best").setDescription("Best bets — all categories"),
     new SlashCommandBuilder().setName("locks").setDescription("LOCKS and lockable"),
     new SlashCommandBuilder().setName("media").setDescription("Media bets map"),
-    new SlashCommandBuilder().setName("value").setDescription("VALUE picks"),
-    new SlashCommandBuilder().setName("props").setDescription("Player props"),
+    new SlashCommandBuilder().setName("value").setDescription("VALUE picks status"),
+    new SlashCommandBuilder().setName("props").setDescription("Player props status"),
     new SlashCommandBuilder().setName("prop").setDescription("Player props alias"),
-    new SlashCommandBuilder().setName("parlay").setDescription("Parlay indications"),
+    new SlashCommandBuilder().setName("parlay").setDescription("Parlay status"),
     new SlashCommandBuilder().setName("parlays").setDescription("Parlays alias"),
     new SlashCommandBuilder().setName("scan").setDescription("Force scan and post"),
     new SlashCommandBuilder().setName("refresh").setDescription("Force refresh"),
@@ -44,6 +46,7 @@ function buildCommands() {
     new SlashCommandBuilder().setName("review").setDescription("Self-review"),
     new SlashCommandBuilder().setName("pending").setDescription("Pending picks"),
     new SlashCommandBuilder().setName("status").setDescription("Bot status"),
+    new SlashCommandBuilder().setName("registry").setDescription("Category registry map"),
     new SlashCommandBuilder().setName("help").setDescription("Command menu"),
     new SlashCommandBuilder()
       .setName("logpick")
