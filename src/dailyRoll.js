@@ -1,6 +1,7 @@
 /**
  * Daily auto card — wires dailyEngine into desk state
  * Single path: pipeline → validate → desk memory → Discord consumers
+ * Always surfaces best available play on LOTD / liveCard when games exist.
  */
 import { runDailyPipeline, getCurrentBoard } from "./dailyEngine.js";
 import { lockOfTheDay, liveCard } from "./data/desk.js";
@@ -26,6 +27,7 @@ function toDeskPick(p, tier) {
     autopsySurvived: p.autopsySurvived,
     playLevel: p.playLevel,
     status: p.status,
+    forced: !!p.forced,
     analysis: {
       form: p.form,
       situational: p.situational,
@@ -40,6 +42,30 @@ function toDeskPick(p, tier) {
     analyzedAt: p.analyzedAt,
     lastVerified: p.lastVerified
   };
+}
+
+function setLotd(top, stamp) {
+  lockOfTheDay.sport = top.sport;
+  lockOfTheDay.selection = top.selection;
+  lockOfTheDay.pick = top.selection;
+  lockOfTheDay.odds = top.price;
+  lockOfTheDay.priceGuide = top.price;
+  lockOfTheDay.units = top.tier === "LOCK" ? 1 : 0.5;
+  lockOfTheDay.why = (top.top3 || []).join("; ") || (top.forced ? "Best available side on the board" : "");
+  lockOfTheDay.match = top.game;
+  lockOfTheDay.game = top.game;
+  lockOfTheDay.modelProb = top.modelProb;
+  lockOfTheDay.probabilityPct = top.probabilityPct;
+  lockOfTheDay.edge = top.edge;
+  lockOfTheDay.forced = !!top.forced;
+  lockOfTheDay.analysis = {
+    form: top.form,
+    situational: top.situational,
+    supporting: (top.top3 || [])[0],
+    sampleNote: top.sampleNote,
+    missing: top.missing
+  };
+  lockOfTheDay.date = stamp;
 }
 
 export async function rollDailyCard({ force = false } = {}) {
@@ -60,53 +86,43 @@ export async function rollDailyCard({ force = false } = {}) {
       liveCard.picks.push(toDeskPick(p, p.tier === "LOCK" ? "LOCK" : "LEAN"));
     }
 
-    if (board.topPlays?.length) {
-      const top = board.topPlays[0];
-      lockOfTheDay.sport = top.sport;
-      lockOfTheDay.selection = top.selection;
-      lockOfTheDay.pick = top.selection;
-      lockOfTheDay.odds = top.price;
-      lockOfTheDay.priceGuide = top.price;
-      lockOfTheDay.units = 1;
-      lockOfTheDay.why = (top.top3 || []).join("; ");
-      lockOfTheDay.match = top.game;
-      lockOfTheDay.game = top.game;
-      lockOfTheDay.modelProb = top.modelProb;
-      lockOfTheDay.probabilityPct = top.probabilityPct;
-      lockOfTheDay.edge = top.edge;
-      lockOfTheDay.analysis = {
-        form: top.form,
-        situational: top.situational,
-        supporting: (top.top3 || [])[0],
-        sampleNote: top.sampleNote,
-        missing: top.missing
-      };
-      lockOfTheDay.date = board.stamp;
+    const head = board.topPlays?.[0] || board.leans?.[0];
+    if (head) {
+      setLotd(head, board.stamp);
     } else {
       lockOfTheDay.selection = "";
       lockOfTheDay.pick = "";
-      lockOfTheDay.why = "NO QUALIFYING PLAY TODAY";
+      lockOfTheDay.why = "Waiting for live games on ESPN boards";
       lockOfTheDay.odds = "";
       lockOfTheDay.edge = null;
+      lockOfTheDay.forced = false;
     }
 
     return board;
   } catch (e) {
     console.error("rollDailyCard:", e.message);
-    return { noPlay: true, text: "🚫 Scan failed — " + e.message, error: e.message, topPlays: [], leans: [] };
+    return {
+      noPlay: false,
+      emptyBoard: true,
+      text: "📡 Scan failed — " + e.message + "\nWill retry on next schedule or /scan.",
+      error: e.message,
+      topPlays: [],
+      leans: []
+    };
   }
 }
 
 export async function ensureTodayCard() {
   const board = getCurrentBoard();
   if (board && !board.stale) {
-    // Still refresh desk memory from current board if liveCard empty
     if (!liveCard.picks?.length && (board.topPlays?.length || board.leans?.length)) {
       liveCard.dateLabel = board.stamp || "Today";
       liveCard.picks = [
         ...(board.topPlays || []).map((p) => toDeskPick(p, "LOCK")),
         ...(board.leans || []).map((p) => toDeskPick(p, "LEAN"))
       ];
+      const head = board.topPlays?.[0] || board.leans?.[0];
+      if (head) setLotd(head, board.stamp);
     }
     return board;
   }
