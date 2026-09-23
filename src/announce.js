@@ -1,23 +1,74 @@
 /**
  * Daily automation + change announcements
- * Morning scan, evening review, monitoring alerts
  */
 import { EmbedBuilder } from "discord.js";
 import { rollDailyCard, getLastBoard } from "./dailyRoll.js";
 import { reverifyPicks, getCurrentBoard } from "./dailyEngine.js";
-import { config } from "./config.js";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEDUPE_PATH = path.join(__dirname, "data", "announce_dedupe.json");
+
+function loadDedupe() {
+  try {
+    if (fs.existsSync(DEDUPE_PATH)) return JSON.parse(fs.readFileSync(DEDUPE_PATH, "utf8"));
+  } catch {}
+  return {};
+}
+
+function saveDedupe(d) {
+  try {
+    fs.mkdirSync(path.dirname(DEDUPE_PATH), { recursive: true });
+    fs.writeFileSync(DEDUPE_PATH, JSON.stringify(d, null, 2));
+  } catch (e) {
+    console.warn("dedupe save:", e.message);
+  }
+}
+
+function chicagoDateKey() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  return (
+    parts.find((p) => p.type === "year").value +
+    parts.find((p) => p.type === "month").value +
+    parts.find((p) => p.type === "day").value
+  );
+}
 
 export async function morningBundle() {
+  const key = chicagoDateKey();
+  const dedupe = loadDedupe();
+  if (dedupe.morningPosted === key) {
+    console.log("morningBundle: already posted for", key, "— skip duplicate");
+    const board = getCurrentBoard() || getLastBoard();
+    const e = new EmbedBuilder()
+      .setColor(0x95a5a6)
+      .setTitle("🌅 DAILY SCAN · already published today")
+      .setDescription(
+        (board?.text || "Board already live for today. Use `/scan` to force refresh.").slice(0, 3500)
+      )
+      .setFooter({ text: "EDGE PLAY · dedupe · 21+" })
+      .setTimestamp();
+    return [{ embeds: [e] }];
+  }
+
   const board = await rollDailyCard({ force: true });
-  const embeds = [];
+  dedupe.morningPosted = key;
+  saveDedupe(dedupe);
+
   const e = new EmbedBuilder()
     .setColor(board.noPlay ? 0xe74c3c : 0x2ecc71)
     .setTitle(board.noPlay ? "🌅 DAILY SCAN · NO QUALIFYING PLAY" : "🌅 DAILY SCAN · BOARD LIVE")
     .setDescription((board.text || "Scan complete.").slice(0, 4000))
     .setFooter({ text: "EDGE PLAY · process guarantee only · 21+" })
     .setTimestamp();
-  embeds.push(e);
-  return embeds.map(em => ({ embeds: [em] }));
+  return [{ embeds: [e] }];
 }
 
 export async function eveningBundle() {
@@ -27,7 +78,8 @@ export async function eveningBundle() {
     .setTitle("🌆 EVENING REVIEW")
     .setDescription(
       board
-        ? ((board.text || "").slice(0, 3500) + "\n\n_Post-game grading runs when results are final._")
+        ? (board.text || "").slice(0, 3500) +
+          "\n\n_Post-game grading: use `/pending` then `/grade` when results are final._"
         : "No board for today."
     )
     .setFooter({ text: "EDGE PLAY · transparent tracking · 21+" })
@@ -50,6 +102,17 @@ export async function runChangeAnnounce() {
             .setTimestamp()
         ]
       });
+    } else if (u.type === "RESCAN" || u.type === "RESCAN_FAIL") {
+      out.push({
+        content: u.type === "RESCAN" ? "🔄 **BOARD REFRESHED**" : "⚠️ **RESCAN FAILED**",
+        embeds: [
+          new EmbedBuilder()
+            .setColor(u.type === "RESCAN" ? 0x3498db : 0xe74c3c)
+            .setTitle(u.type === "RESCAN" ? "🔄 AUTO RESCAN" : "⚠️ RESCAN FAILED")
+            .setDescription(u.message)
+            .setTimestamp()
+        ]
+      });
     }
   }
   for (const r of removed) {
@@ -68,5 +131,8 @@ export async function runChangeAnnounce() {
 }
 
 export function initSnapshotIfEmpty() {
-  // no-op; state created on first scan
+  // ensure data dir exists
+  try {
+    fs.mkdirSync(path.dirname(DEDUPE_PATH), { recursive: true });
+  } catch {}
 }
