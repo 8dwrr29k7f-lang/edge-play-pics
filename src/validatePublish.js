@@ -1,7 +1,9 @@
 /**
- * Last-chance validation before any prediction reaches Discord.
- * If a critical check fails → force NO PLAY / strip LOCK label.
- * Never invents data; only rejects inconsistent or unsafe output.
+ * Last-chance validation before predictions reach Discord.
+ * Policy: never wipe the board to NO PLAY.
+ * - False LOCKs → downgrade to LEAN
+ * - Final/postponed / unnamed → drop that pick only
+ * - Keep at least whatever valid LEANs remain
  */
 
 import { parseOddsToImplied } from "./analyticsEngine.js";
@@ -10,14 +12,10 @@ const STALE_MS = 3 * 60 * 60 * 1000;
 
 function isNamedPick(selection) {
   if (!selection || selection === "—") return false;
-  if (/process side|soft-side|board scan|no forced|NO QUALIFYING/i.test(selection)) return false;
+  if (/process side|soft-side|board scan|NO QUALIFYING/i.test(selection)) return false;
   return true;
 }
 
-/**
- * Validate a single pick object (from engine / liveCard).
- * @returns {{ ok: boolean, reasons: string[], pick: object }}
- */
 export function validatePick(p) {
   const reasons = [];
   if (!p) return { ok: false, reasons: ["missing pick"], pick: null };
@@ -30,14 +28,12 @@ export function validatePick(p) {
   if (!game || game === "—") reasons.push("missing event/game");
   if (!sport) reasons.push("missing sport");
 
-  // Stale
   if (p.analyzedAt) {
     const age = Date.now() - new Date(p.analyzedAt).getTime();
     if (age > STALE_MS) reasons.push("analysis older than 3h");
   }
   if (p.stale) reasons.push("marked stale");
 
-  // Probability / edge consistency when both present
   const modelProb =
     p.modelProb != null
       ? Number(p.modelProb) > 1
@@ -56,7 +52,6 @@ export function validatePick(p) {
     }
   }
 
-  // LOCK without evidence → downgrade path
   const tier = String(p.tier || p.playLevel || "").toUpperCase();
   const isLockLabel = tier === "LOCK" || tier === "STRONG PLAY" || tier === "STRONG";
   if (isLockLabel) {
@@ -67,37 +62,42 @@ export function validatePick(p) {
     if (p.autopsySurvived === false) reasons.push("LOCK label failed autopsy");
   }
 
-  // Final / postponed
   if (/final|postpon|cancel/i.test(String(p.status || "") + game + selection)) {
     reasons.push("event final or postponed");
   }
 
-  const ok = reasons.length === 0;
+  const hardDrop = reasons.some((r) =>
+    /final or postponed|not a named|missing event/i.test(r)
+  );
+
   let pick = { ...p };
-  if (!ok && isLockLabel) {
-    // Downgrade rather than publish false LOCK
+  if (hardDrop) {
+    return { ok: false, reasons, pick: null };
+  }
+
+  // Soft issues → keep as LEAN (never empty the board)
+  if (reasons.length && isLockLabel) {
     pick.tier = "LEAN";
     pick.playLevel = "LEAN";
     pick._downgraded = true;
     pick._validationReasons = reasons;
-  }
-  if (!ok && reasons.some((r) => /final or postponed|not a named|missing event/i.test(r))) {
-    pick = null;
+  } else if (reasons.length) {
+    pick.tier = "LEAN";
+    pick.playLevel = "LEAN";
+    pick.forced = true;
+    pick._validationReasons = reasons;
   }
 
-  return { ok, reasons, pick };
+  return { ok: reasons.length === 0, reasons, pick };
 }
 
-/**
- * Validate full board before Discord post.
- * Strips invalid picks; may flip noPlay.
- */
 export function validateBoard(board) {
   if (!board) {
     return {
       board: {
-        noPlay: true,
-        text: "🚫 NO QUALIFYING PLAY — validation failed (empty board).",
+        noPlay: false,
+        emptyBoard: true,
+        text: "📡 No board data yet — run /scan.",
         topPlays: [],
         leans: []
       },
@@ -107,43 +107,37 @@ export function validateBoard(board) {
 
   const rejected = [];
   const topPlays = [];
+  const leans = [];
+
   for (const p of board.topPlays || []) {
     const v = validatePick(p);
-    if (v.pick && (v.ok || v.pick._downgraded)) {
-      if (v.pick._downgraded) {
-        rejected.push(`${p.selection}: downgraded — ${v.reasons.join("; ")}`);
-        // moved to leans conceptually
-      } else {
-        topPlays.push(v.pick);
-      }
-    } else {
+    if (!v.pick) {
       rejected.push(`${p.selection || "?"}: ${v.reasons.join("; ")}`);
+      continue;
+    }
+    if (v.pick._downgraded || v.pick.tier === "LEAN") {
+      leans.push(v.pick);
+      if (v.pick._downgraded)
+        rejected.push(`${p.selection}: downgraded — ${v.reasons.join("; ")}`);
+    } else {
+      topPlays.push(v.pick);
     }
   }
 
-  const leans = [];
   for (const p of board.leans || []) {
     const v = validatePick(p);
     if (v.pick) leans.push(v.pick);
     else rejected.push(`${p.selection || "?"}: ${v.reasons.join("; ")}`);
   }
 
-  // Collect downgraded locks into leans
-  for (const p of board.topPlays || []) {
-    const v = validatePick(p);
-    if (v.pick?._downgraded) leans.push(v.pick);
-  }
-
-  const noPlay = topPlays.length + leans.length === 0;
   let text = board.text || "";
-  if (noPlay && !board.noPlay) {
-    text =
-      "🚫 NO QUALIFYING PLAY TODAY\n" +
-      "Validation gate removed all candidates (stale, inconsistent, or insufficient evidence).\n" +
-      (rejected.length ? rejected.slice(0, 5).map((r) => `• ${r}`).join("\n") : "");
-  }
-  if (rejected.length && !noPlay) {
-    text += "\n\n_Validation notes:_\n" + rejected.slice(0, 5).map((r) => `• ${r}`).join("\n");
+  if (rejected.length) {
+    text +=
+      "\n\n_Validation notes:_\n" +
+      rejected
+        .slice(0, 5)
+        .map((r) => `• ${r}`)
+        .join("\n");
   }
 
   return {
@@ -151,7 +145,8 @@ export function validateBoard(board) {
       ...board,
       topPlays,
       leans,
-      noPlay,
+      noPlay: false,
+      emptyBoard: topPlays.length + leans.length === 0,
       text,
       validatedAt: new Date().toISOString()
     },
