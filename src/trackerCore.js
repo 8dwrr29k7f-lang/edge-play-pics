@@ -1,5 +1,5 @@
 /**
- * Tracker core — single ledger for log / grade / summary
+ * Tracker core — single ledger for log / grade / summary / auto-grade
  */
 import fs from "fs";
 import path from "path";
@@ -12,7 +12,7 @@ function empty() {
   return {
     version: 1,
     updatedAt: new Date().toISOString(),
-    notes: "Self-learning ledger. /logpick /grade /track /review.",
+    notes: "Self-learning ledger. /logpick /grade /track /review. Auto-grade from ESPN finals.",
     seed: { wins: 2, losses: 3, units: -1.86, roiPct: -31.6 },
     picks: []
   };
@@ -73,7 +73,6 @@ export function logPick(row) {
   };
   d.picks = d.picks || [];
   d.picks.unshift(r);
-  // Cap ledger size to avoid unbounded growth
   if (d.picks.length > 500) d.picks = d.picks.slice(0, 500);
   save(d);
   return r;
@@ -86,8 +85,7 @@ export function gradePick({ result, id, selection, closingOdds }) {
   let row = (d.picks || []).find((p) => p.id === id);
   if (!row && selection) {
     row = (d.picks || []).find(
-      (p) =>
-        p.selection === selection && normalizeResult(p.result) === "pending"
+      (p) => p.selection === selection && normalizeResult(p.result) === "pending"
     );
   }
   if (!row) return null;
@@ -95,6 +93,7 @@ export function gradePick({ result, id, selection, closingOdds }) {
   if (closingOdds != null) row.closingOdds = Number(closingOdds);
   row.pl = plFromResult(row);
   row.gradedAt = new Date().toISOString();
+  row.autoGraded = false;
   save(d);
   return row;
 }
@@ -178,7 +177,7 @@ export function analyzePatterns() {
   }
   insights.push({
     level: "info",
-    text: "Never rewrite graded history. Pending stays pending until /grade."
+    text: "Never rewrite graded history. Pending stays pending until /grade or auto-grade from finals."
   });
   return { insights, graded: summary.graded, summary };
 }
@@ -191,8 +190,7 @@ export function ingestLivePicks(picks = []) {
     const sel = p.selection || p.pick;
     if (!sel) continue;
     const id =
-      p.id ||
-      `${p.date || "x"}-${p.sport || ""}-${sel}-${p.eventId || ""}`;
+      p.id || `${p.date || "x"}-${p.sport || ""}-${sel}-${p.eventId || ""}`;
     if ((d.picks || []).find((x) => x.id === id)) continue;
     d.picks = d.picks || [];
     d.picks.unshift({
@@ -206,6 +204,7 @@ export function ingestLivePicks(picks = []) {
       label: p.tier || p.label || "LEAN",
       market: p.market || "ml",
       game: p.game || "",
+      eventId: p.eventId || "",
       reasons: Array.isArray(p.reasoning) ? p.reasoning.join("; ") : String(p.reasons || ""),
       created: new Date().toISOString()
     });
@@ -216,4 +215,68 @@ export function ingestLivePicks(picks = []) {
     save(d);
   }
   return added;
+}
+
+/**
+ * Auto-grade pending moneyline picks from ESPN final results.
+ * finals: [{ sport, game, home: {abbr, score, winner}, away: {abbr, score, winner}, eventId }]
+ * Returns array of graded rows.
+ */
+export function autoGradeFromFinals(finals = []) {
+  if (!Array.isArray(finals) || !finals.length) return [];
+  const d = load();
+  const pending = (d.picks || []).filter((p) => normalizeResult(p.result) === "pending");
+  if (!pending.length) return [];
+  const graded = [];
+
+  for (const p of pending) {
+    const market = String(p.market || "ml").toLowerCase();
+    if (market !== "ml" && market !== "moneyline") continue;
+
+    const sel = String(p.selection || "");
+    const teamMatch = sel.match(/^([A-Z0-9]{2,4})\s*ML$/i) || sel.match(/^([A-Z0-9]{2,4})\b/i);
+    if (!teamMatch) continue;
+    const teamAbbr = teamMatch[1].toUpperCase();
+
+    const match = finals.find((f) => {
+      if (p.eventId && f.eventId && String(p.eventId) === String(f.eventId)) return true;
+      if (p.game && f.game && p.game.replace(/\s/g, "") === f.game.replace(/\s/g, "")) return true;
+      const homeA = (f.home?.abbr || "").toUpperCase();
+      const awayA = (f.away?.abbr || "").toUpperCase();
+      return teamAbbr === homeA || teamAbbr === awayA;
+    });
+    if (!match) continue;
+
+    const homeA = (match.home?.abbr || "").toUpperCase();
+    const awayA = (match.away?.abbr || "").toUpperCase();
+    let won = null;
+    if (teamAbbr === homeA) {
+      if (match.home.winner === true) won = true;
+      else if (match.away.winner === true) won = false;
+      else if (match.home.score != null && match.away.score != null) {
+        if (match.home.score > match.away.score) won = true;
+        else if (match.home.score < match.away.score) won = false;
+        else won = null; // push unlikely for ML but treat as unresolved
+      }
+    } else if (teamAbbr === awayA) {
+      if (match.away.winner === true) won = true;
+      else if (match.home.winner === true) won = false;
+      else if (match.home.score != null && match.away.score != null) {
+        if (match.away.score > match.home.score) won = true;
+        else if (match.away.score < match.home.score) won = false;
+        else won = null;
+      }
+    }
+    if (won === null) continue;
+
+    p.result = won ? "win" : "loss";
+    p.pl = plFromResult(p);
+    p.gradedAt = new Date().toISOString();
+    p.autoGraded = true;
+    p.autoGradeSource = "ESPN final";
+    graded.push({ ...p });
+  }
+
+  if (graded.length) save(d);
+  return graded;
 }
