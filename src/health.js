@@ -43,7 +43,7 @@ function probeEngine() {
     if (imp.implied == null || Math.abs(imp.implied - 0.5238) > 0.01) {
       return { ok: false, detail: "odds math failed" };
     }
-    // Weak case must still return a LEAN (forced play policy)
+    // Weak case MUST be NO PLAY (never force confidence)
     const weak = evaluateMatchup({
       sport: "NFL",
       selection: "TEST ML",
@@ -52,15 +52,19 @@ function probeEngine() {
       form: "thin sample 1-0",
       sampleNote: "thin sample",
       missing: "injury uncertainty",
-      allowNoOdds: true
+      supporting: "close season records",
+      opposing: "injury uncertainty"
     });
-    if (weak.playLevel === "NO PLAY") {
-      return { ok: false, detail: "policy fail — weak named pick should be LEAN not NO PLAY" };
+    if (weak.playLevel !== "NO PLAY") {
+      return {
+        ok: false,
+        detail: `policy fail — weak named pick should be NO PLAY, got ${weak.playLevel}`
+      };
     }
     if (weak.playLevel === "STRONG PLAY") {
       return { ok: false, detail: "gate fail — weak case must not be LOCK" };
     }
-    // Strong case can be STRONG PLAY or LEAN depending on thresholds
+    // Strong case with clean data should not be NO PLAY
     const strong = evaluateMatchup({
       sport: "NFL",
       selection: "PHI ML",
@@ -70,13 +74,12 @@ function probeEngine() {
       supporting: "PHI holds stronger season record vs DAL clear edge",
       situational: "Home",
       sampleNote: "full season sample available",
-      missing: "",
-      allowNoOdds: false
+      missing: ""
     });
     if (!strong.playLevel || strong.playLevel === "NO PLAY") {
       return { ok: false, detail: "strong case should not be NO PLAY" };
     }
-    return { ok: true, detail: "odds math + force-play policy OK" };
+    return { ok: true, detail: "odds math + NO PLAY policy OK" };
   } catch (e) {
     return { ok: false, detail: e.message };
   }
