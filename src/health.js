@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "./config.js";
 import { parseOddsToImplied, evaluateMatchup } from "./analyticsEngine.js";
+import { probeOddsBackend } from "./liveApi.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
@@ -25,16 +26,7 @@ async function probeEspn() {
 }
 
 async function probeOddsApi() {
-  if (!config.apiBase) return { ok: null, detail: "not configured" };
-  try {
-    const res = await fetch(`${config.apiBase}/api/best-bets`, {
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` };
-    return { ok: true, detail: "reachable" };
-  } catch (e) {
-    return { ok: false, detail: e.message || "unreachable" };
-  }
+  return probeOddsBackend();
 }
 
 function probeEngine() {
@@ -43,7 +35,6 @@ function probeEngine() {
     if (imp.implied == null || Math.abs(imp.implied - 0.5238) > 0.01) {
       return { ok: false, detail: "odds math failed" };
     }
-    // Weak case MUST be NO PLAY (never force confidence)
     const weak = evaluateMatchup({
       sport: "NFL",
       selection: "TEST ML",
@@ -64,7 +55,6 @@ function probeEngine() {
     if (weak.playLevel === "STRONG PLAY") {
       return { ok: false, detail: "gate fail — weak case must not be LOCK" };
     }
-    // Strong case with clean data should not be NO PLAY
     const strong = evaluateMatchup({
       sport: "NFL",
       selection: "PHI ML",
