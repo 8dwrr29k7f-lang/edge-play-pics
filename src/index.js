@@ -11,24 +11,12 @@ import cron from "node-cron";
 import { config, assertConfig } from "./config.js";
 import { wireEmbed, limitsEmbed, scoresEmbed, helpEmbed, kalshiEmbed } from "./embeds.js";
 import { fetchMlbScores } from "./scores.js";
-import { fetchMultiScores } from "./liveScores.js";
-import { runScan } from "./scanner.js";
-import {
-  liveBestBetsEmbed,
-  liveLocksEmbed,
-  livePLEmbed,
-  liveAllPicksEmbed
-} from "./liveEmbeds.js";
-import { refreshData } from "./liveApi.js";
 import {
   categoryEmbed,
-  bestOverallEmbed,
-  allLocksEmbed,
-  mediaAllEmbed
+  bestOverallEmbed
 } from "./categoryEmbed.js";
-import { categories } from "./data/desk.js";
 import { lotdEmbed, liveCardEmbed, locksTodayEmbed } from "./lotdEmbed.js";
-import { scanCashoutAlerts, hedgesEmbed } from "./cashout.js";
+import { hedgesEmbed } from "./cashout.js";
 import { leanEmbed, holdEmbed, mediaFollowEmbed } from "./mediaFollow.js";
 import {
   morningBundle,
@@ -37,47 +25,57 @@ import {
   initSnapshotIfEmpty
 } from "./announce.js";
 import { learnEmbed, enhanceReviewEmbed } from "./trackerLearn.js";
-import { rollDailyCard, ensureTodayCard, getLastBoard } from "./dailyRoll.js";
+import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";
 import { getCurrentBoard, getTrackerSummary, reverifyPicks } from "./dailyEngine.js";
 import { registerCommandsOnBoot } from "./registerOnBoot.js";
 import {
   logPick,
   gradePick,
-  ingestLivePicks,
   trackerSummaryEmbed,
-  trackerReviewEmbed,
   trackerPendingEmbed
 } from "./tracker.js";
+import { refreshData } from "./liveApi.js";
+import { runHealthCheck } from "./health.js";
 
 assertConfig();
 
 const PORT = Number(process.env.PORT) || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("EDGE PLAY PICS · alive\n");
-}).listen(PORT, () => console.log(`Health listener on :${PORT}`));
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("EDGE PLAY PICS · alive\n");
+  })
+  .listen(PORT, () => console.log(`Health listener on :${PORT}`));
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
   partials: [Partials.Channel]
 });
 
+let schedulerArmed = false;
+let discordReady = false;
+
 async function postToPics(payload) {
   const chId = config.picsChannelId;
   if (!chId) {
-    console.warn("PICS_CHANNEL_ID not set — skip auto post");
+    console.warn("[postToPics] PICS_CHANNEL_ID not set — skip");
     return;
   }
   try {
     const ch = await client.channels.fetch(chId);
-    if (!ch || !ch.isTextBased()) return;
+    if (!ch || !ch.isTextBased()) {
+      console.warn("[postToPics] channel missing or not text");
+      return;
+    }
     if (Array.isArray(payload)) {
-      for (const p of payload) await ch.send(p).catch((e) => console.warn("post:", e.message));
+      for (const p of payload) {
+        await ch.send(p).catch((e) => console.warn("[postToPics]", e.message));
+      }
     } else {
-      await ch.send(payload).catch((e) => console.warn("post:", e.message));
+      await ch.send(payload).catch((e) => console.warn("[postToPics]", e.message));
     }
   } catch (e) {
-    console.warn("postToPics:", e.message);
+    console.warn("[postToPics]", e.message);
   }
 }
 
@@ -86,11 +84,12 @@ const SPORT_KEYS = new Set([
 ]);
 
 client.once(Events.ClientReady, async (c) => {
-  console.log(`Logged in as ${c.user.tag}`);
+  discordReady = true;
+  console.log(`[boot] Logged in as ${c.user.tag}`);
   try {
     await registerCommandsOnBoot();
   } catch (e) {
-    console.warn("registerCommandsOnBoot:", e.message);
+    console.warn("[boot] registerCommandsOnBoot:", e.message);
   }
   client.user.setActivity("EDGE PLAY · daily engine", { type: ActivityType.Watching });
 
@@ -99,12 +98,12 @@ client.once(Events.ClientReady, async (c) => {
   cron.schedule(
     "0 8 * * *",
     async () => {
-      console.log("🌅 DAILY SCAN starting...");
+      console.log("[cron] 08:00 DAILY SCAN");
       try {
         const embeds = await morningBundle();
         await postToPics(embeds);
       } catch (e) {
-        console.error("morningBundle:", e.message);
+        console.error("[cron] morningBundle:", e.message);
       }
     },
     { timezone: "America/Chicago" }
@@ -113,12 +112,12 @@ client.once(Events.ClientReady, async (c) => {
   cron.schedule(
     "0 12 * * *",
     async () => {
-      console.log("🔄 PRE-GAME MONITOR...");
+      console.log("[cron] 12:00 MONITOR");
       try {
         const alerts = await runChangeAnnounce();
         if (alerts.length) await postToPics(alerts);
       } catch (e) {
-        console.error("midday monitor:", e.message);
+        console.error("[cron] midday:", e.message);
       }
     },
     { timezone: "America/Chicago" }
@@ -127,13 +126,13 @@ client.once(Events.ClientReady, async (c) => {
   cron.schedule(
     "0 16 * * *",
     async () => {
-      console.log("🔄 PRE-GAME MONITOR 16:00...");
+      console.log("[cron] 16:00 MONITOR");
       try {
         await reverifyPicks();
         const alerts = await runChangeAnnounce();
         if (alerts.length) await postToPics(alerts);
       } catch (e) {
-        console.error("16:00 monitor:", e.message);
+        console.error("[cron] 16:00:", e.message);
       }
     },
     { timezone: "America/Chicago" }
@@ -142,12 +141,12 @@ client.once(Events.ClientReady, async (c) => {
   cron.schedule(
     "0 20 * * *",
     async () => {
-      console.log("🌆 EVENING REVIEW...");
+      console.log("[cron] 20:00 EVENING");
       try {
         const embeds = await eveningBundle();
         await postToPics(embeds);
       } catch (e) {
-        console.error("eveningBundle:", e.message);
+        console.error("[cron] evening:", e.message);
       }
     },
     { timezone: "America/Chicago" }
@@ -158,17 +157,26 @@ client.once(Events.ClientReady, async (c) => {
     try {
       await reverifyPicks();
     } catch (e) {
-      console.warn("interval reverify:", e.message);
+      console.warn("[interval] reverify:", e.message);
     }
   }, mins * 60 * 1000);
 
+  schedulerArmed = true;
+  console.log(`[boot] scheduler armed · reverify every ${mins}m`);
+
   setTimeout(async () => {
     try {
-      console.log("Boot scan...");
+      console.log("[boot] initial scan...");
       await ensureTodayCard();
-      console.log("Boot board ready");
+      console.log("[boot] board ready");
     } catch (e) {
-      console.warn("boot scan:", e.message);
+      console.warn("[boot] scan:", e.message);
+    }
+    try {
+      const h = await runHealthCheck({ discordReady, schedulerArmed });
+      console.log("[boot] health:\n" + h.lines.join("\n"));
+    } catch (e) {
+      console.warn("[boot] health:", e.message);
     }
   }, 5000);
 });
@@ -177,13 +185,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const name = interaction.commandName;
   try {
-    // ── Help ──────────────────────────────────────────────
     if (name === "help") {
       await interaction.reply({ embeds: [helpEmbed()] });
       return;
     }
 
-    // ── Daily board ───────────────────────────────────────
     if (name === "daily" || name === "card" || name === "roll") {
       await interaction.deferReply();
       const board = await ensureTodayCard();
@@ -209,7 +215,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ── Evidence cards ────────────────────────────────────
     if (name === "locks" || name === "lock") {
       await interaction.reply({ embeds: [locksTodayEmbed()] });
       return;
@@ -231,7 +236,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ── Lean / Hold / Media ───────────────────────────────
     if (name === "lean") {
       await interaction.reply({ embeds: [leanEmbed()] });
       return;
@@ -247,13 +251,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ── Hedge / cashout ───────────────────────────────────
     if (name === "hedge" || name === "cashout") {
       await interaction.reply({ embeds: [hedgesEmbed()] });
       return;
     }
 
-    // ── Limits / scores ───────────────────────────────────
     if (name === "limits") {
       await interaction.reply({ embeds: [limitsEmbed()] });
       return;
@@ -271,27 +273,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ── Status / updates / refresh ────────────────────────
     if (name === "status") {
+      await interaction.deferReply();
       const sum = getTrackerSummary();
       const board = getCurrentBoard();
+      const health = await runHealthCheck({ discordReady, schedulerArmed });
       const e = new EmbedBuilder()
-        .setColor(0x3498db)
+        .setColor(health.ok ? 0x2ecc71 : 0xe74c3c)
         .setTitle("📡 SYSTEM STATUS")
         .setDescription(
           [
-            `**Discord:** online · PORT ${PORT}`,
-            `**Channel:** ${config.picsChannelId ? "set" : "MISSING PICS_CHANNEL_ID"}`,
-            `**Tracker:** ${sum.record} (${sum.pending} pending)`,
+            ...health.lines,
+            "",
             `**Board:** ${board ? (board.stale ? "STALE" : board.noPlay ? "NO PLAY" : "LIVE") : "none yet"}`,
-            `**Scan interval:** ${config.scanMinutes || 15}m`,
-            `**Engine:** active (evidence + autopsy)`,
-            `**Odds API:** ${config.apiBase ? config.apiBase : "not configured (ESPN-only)"}`
+            `**Tracker:** ${sum.record} (${sum.pending} pending)`,
+            `**Channel:** ${config.picsChannelId ? "set" : "MISSING PICS_CHANNEL_ID"}`,
+            `**Scan interval:** ${config.scanMinutes || 15}m · PORT ${PORT}`
           ].join("\n")
         )
         .setFooter({ text: "EDGE PLAY · health check · 21+" })
         .setTimestamp();
-      await interaction.reply({ embeds: [e] });
+      await interaction.editReply({ embeds: [e] });
       return;
     }
 
@@ -318,7 +320,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ── Tracker ───────────────────────────────────────────
     if (name === "track" || name === "pl") {
       await interaction.reply({ embeds: [trackerSummaryEmbed()] });
       return;
@@ -341,22 +342,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const selection = interaction.options.getString("selection", true);
       const odds = interaction.options.getNumber("odds", true);
       const units = interaction.options.getNumber("units", true);
-      const label = interaction.options.getString("label") || "LEAN";
-      const market = interaction.options.getString("market") || "ml";
-      const game = interaction.options.getString("game") || "";
-      const reasons = interaction.options.getString("reasons") || "";
+      if (!Number.isFinite(odds) || !Number.isFinite(units) || units <= 0) {
+        await interaction.reply({ content: "Invalid odds or units.", ephemeral: true });
+        return;
+      }
       const row = logPick({
         sport,
         selection,
         odds,
         units,
-        label,
-        market,
-        game,
-        reasons
+        label: interaction.options.getString("label") || "LEAN",
+        market: interaction.options.getString("market") || "ml",
+        game: interaction.options.getString("game") || "",
+        reasons: interaction.options.getString("reasons") || ""
       });
       await interaction.reply({
-        content: `Logged \`${row.id}\` **${sport}** ${selection} ${odds > 0 ? "+" : ""}${odds} · ${units}u · ${label}`,
+        content: `Logged \`${row.id}\` **${sport}** ${selection} ${odds > 0 ? "+" : ""}${odds} · ${units}u · ${row.label}`,
         ephemeral: true
       });
       return;
@@ -370,48 +371,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const id = interaction.options.getString("id");
       const selection = interaction.options.getString("selection");
-      const closing = interaction.options.getNumber("closing");
       if (!id && !selection) {
         await interaction.reply({ content: "Provide id or selection", ephemeral: true });
         return;
       }
-      const row = gradePick({ result, id, selection, closingOdds: closing });
+      const row = gradePick({
+        result,
+        id,
+        selection,
+        closingOdds: interaction.options.getNumber("closing")
+      });
       if (!row) {
         await interaction.reply({ content: "Pick not found in pending ledger.", ephemeral: true });
         return;
       }
       await interaction.reply({
-        content: `Graded \`${row.id}\` → **${result.toUpperCase()}** · PL ${row.pl >= 0 ? "+" : ""}${row.pl}u`,
+        content: `Graded \`${row.id}\` → **${result.toUpperCase()}** · PL ${row.pl >= 0 ? "+" : ""}${Number(row.pl).toFixed(2)}u`,
         ephemeral: true
       });
       return;
     }
 
-    // ── Sport desks ───────────────────────────────────────
     if (SPORT_KEYS.has(name)) {
       if (name === "kalshi") {
         await interaction.reply({ embeds: [kalshiEmbed()] });
         return;
       }
       const emb = categoryEmbed(name);
-      if (emb) {
-        await interaction.reply({ embeds: [emb] });
-      } else {
+      if (emb) await interaction.reply({ embeds: [emb] });
+      else {
         await interaction.reply({
-          content: `No desk data for **${name}** yet. Run \`/daily\` to populate from live scan.`,
+          content: `No desk data for **${name}**. Run \`/daily\` first.`,
           ephemeral: true
         });
       }
       return;
     }
 
-    // ── Live OpticOdds-style embeds (graceful if offline) ─
-    if (name === "value" || name === "props" || name === "prop" || name === "parlay" || name === "parlays") {
+    if (["value", "props", "prop", "parlay", "parlays"].includes(name)) {
       await interaction.reply({ embeds: [liveCardEmbed()] });
       return;
     }
 
-    // Fallback
     await interaction.reply({
       content: `Unknown command \`/${name}\`. Try \`/help\`.`,
       ephemeral: true
@@ -423,7 +424,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.deferred || interaction.replied) await interaction.followUp(msg);
       else await interaction.reply(msg);
     } catch {
-      /* ignore secondary failures */
+      /* swallow */
     }
   }
 });
