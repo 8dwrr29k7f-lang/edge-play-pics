@@ -1,7 +1,7 @@
 {
   "name": "edge-play-pics",
-  "version": "4.4.0",
-  "description": "EDGE PLAY PICS — Discord sports desk · evidence-first engine · auto-grade",
+  "version": "4.5.0",
+  "description": "EDGE PLAY PICS — Discord sports desk · stats + media category engine",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
