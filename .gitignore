@@ -2,5 +2,7 @@ node_modules/
 .env
 .DS_Store
 src/data/announce_snap.json
+src/data/announce_dedupe.json
 src/data/dailyState.json
+src/data/.health_probe
 *.log
