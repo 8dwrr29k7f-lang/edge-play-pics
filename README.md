@@ -1,4 +1,4 @@
-# EDGE PLAY PICS v4.3
+# EDGE PLAY PICS v4.4
 
 Discord sports desk bot — **evidence-first daily analytics engine**.
 
@@ -7,21 +7,23 @@ Discord sports desk bot — **evidence-first daily analytics engine**.
 - Daily scan of MLB / NFL / NBA / NHL / NCAAF via public ESPN feeds
 - Multi-factor engine: model · edge · data quality · what-if · autopsy
 - **LOCK only** when strict thresholds pass — otherwise **LEAN** or **NO PLAY**
+- **NO PLAY preferred** over inventing confidence when data is thin
 - Last-chance validation gate before any board reaches Discord
 - Stale protection (3h) + auto-rescan
+- **Auto-grade** wins/losses from ESPN finals for pending ML picks
 - Historical tracker (`/logpick` · `/grade`) — records are never rewritten
 - Never fabricates odds, injuries, lineups, or results
-- Never forces a lock to keep a streak
+- Never forces a lock or lean to keep a board full
 
 ## Daily workflow (America/Chicago)
 
 | Time | Action |
 |------|--------|
 | 08:00 | Daily scan → publish board (deduped per calendar day) |
-| 12:00 | Pre-game monitor / stale alerts |
-| 16:00 | Re-verify + auto-rescan if stale |
+| 12:00 | Pre-game monitor / stale alerts / auto-grade |
+| 16:00 | Re-verify + auto-rescan if stale + auto-grade |
 | 20:00 | Evening review |
-| every `SCAN_MINUTES` | Light reverify |
+| every `SCAN_MINUTES` | Light reverify + auto-grade finals |
 
 ## Commands
 
@@ -51,12 +53,13 @@ Discord sports desk bot — **evidence-first daily analytics engine**.
 
 ```
 SCAN (ESPN)
-  → ANALYZE (analyticsEngine)
+  → ANALYZE (analyticsEngine multi-stage)
   → FILTER (LOCK / LEAN / NO PLAY)
   → VALIDATE (validatePublish gate)
   → PUBLISH (Discord + desk memory)
   → MONITOR (reverify / stale / auto-rescan)
-  → TRACK (/logpick · /grade)
+  → AUTO-GRADE (ESPN finals → tracker)
+  → TRACK (/logpick · /grade · /review)
 ```
 
 ## Health
