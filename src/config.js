@@ -1,4 +1,10 @@
-import "dotenv/config";
+import { createRequire } from "module";
+try {
+  const require = createRequire(import.meta.url);
+  require("dotenv").config();
+} catch {
+  /* Railway injects env — dotenv optional */
+}
 
 export const config = {
   token: process.env.DISCORD_TOKEN || "",
@@ -8,7 +14,8 @@ export const config = {
     process.env.PICS_CHANNEL_ID || process.env.KBO_CHANNEL_ID || "",
   kboChannelId: process.env.KBO_CHANNEL_ID || "",
   scanMinutes: Math.max(5, Number(process.env.SCAN_MINUTES || 15)),
-  apiBase: process.env.EDGE_PLAY_API || "http://127.0.0.1:3777",
+  // Empty = no OpticOdds backend; daily engine uses ESPN only
+  apiBase: (process.env.EDGE_PLAY_API || "").replace(/\/$/, ""),
   colors: {
     navy: 0x0a1628,
     gold: 0xc4a35a,
@@ -16,7 +23,10 @@ export const config = {
     sit: 0xd98880,
     lean: 0xc4a35a,
     muted: 0x2a3544,
-    lock: 0xf1c40f
+    lock: 0xf1c40f,
+    green: 0x2ecc71,
+    red: 0xe74c3c,
+    blue: 0x3498db
   },
   rules: {
     maxTickets: 2,
@@ -30,10 +40,13 @@ export const config = {
 
 export function assertConfig() {
   if (!config.token) {
-    console.error("Missing DISCORD_TOKEN in .env");
+    console.error("FATAL: Missing DISCORD_TOKEN — set it in Railway Variables / .env");
     process.exit(1);
   }
   if (!config.clientId) {
     console.warn("CLIENT_ID missing — slash command registration may fail");
+  }
+  if (!config.picsChannelId) {
+    console.warn("PICS_CHANNEL_ID missing — auto daily posts will be skipped");
   }
 }
