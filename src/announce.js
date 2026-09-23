@@ -62,12 +62,20 @@ export async function morningBundle() {
   dedupe.morningPosted = key;
   saveDedupe(dedupe);
 
-  const waiting = !!board.emptyBoard;
+  const waiting = !!board.emptyBoard || !!board.noPlay;
   const e = new EmbedBuilder()
     .setColor(waiting ? 0x95a5a6 : 0x2ecc71)
-    .setTitle(waiting ? "🌅 DAILY SCAN · WAITING FOR GAMES" : "🌅 DAILY SCAN · BOARD LIVE")
+    .setTitle(
+      waiting
+        ? board.noPlay && !board.emptyBoard
+          ? "🌅 DAILY SCAN · NO PLAY"
+          : "🌅 DAILY SCAN · WAITING FOR GAMES"
+        : "🌅 DAILY SCAN · BOARD LIVE"
+    )
     .setDescription((board.text || "Scan complete.").slice(0, 4000))
-    .setFooter({ text: "EDGE PLAY · always publishes best available play · 21+" })
+    .setFooter({
+      text: "EDGE PLAY · evidence-first · NO PLAY when data is thin · 21+"
+    })
     .setTimestamp();
   return [{ embeds: [e] }];
 }
@@ -79,8 +87,8 @@ export async function eveningBundle() {
     .setTitle("🌆 EVENING REVIEW")
     .setDescription(
       board
-        ? (board.text || "").slice(0, 3500) +
-          "\n\n_Post-game grading: use `/pending` then `/grade` when results are final._"
+        ? (board.text || "").slice(0, 3200) +
+          "\n\n_Auto-grade runs from ESPN finals for pending ML picks. Manual: `/pending` then `/grade`._"
         : "No board for today."
     )
     .setFooter({ text: "EDGE PLAY · transparent tracking · 21+" })
@@ -110,6 +118,17 @@ export async function runChangeAnnounce() {
           new EmbedBuilder()
             .setColor(u.type === "RESCAN" ? 0x3498db : 0xe74c3c)
             .setTitle(u.type === "RESCAN" ? "🔄 AUTO RESCAN" : "⚠️ RESCAN FAILED")
+            .setDescription(u.message)
+            .setTimestamp()
+        ]
+      });
+    } else if (u.type === "AUTO_GRADE") {
+      out.push({
+        content: "✅ **AUTO-GRADED**",
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle("✅ AUTO-GRADE")
             .setDescription(u.message)
             .setTimestamp()
         ]
