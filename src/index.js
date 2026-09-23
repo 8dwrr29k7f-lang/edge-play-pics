@@ -13,8 +13,10 @@ import { wireEmbed, limitsEmbed, scoresEmbed, helpEmbed, kalshiEmbed } from "./e
 import { fetchMlbScores } from "./scores.js";
 import {
   categoryEmbed,
-  bestOverallEmbed
+  bestOverallEmbed,
+  registryEmbed
 } from "./categoryEmbed.js";
+import { sportCommandKeys } from "./categoryRegistry.js";
 import { lotdEmbed, liveCardEmbed, locksTodayEmbed } from "./lotdEmbed.js";
 import { hedgesEmbed } from "./cashout.js";
 import { leanEmbed, holdEmbed, mediaFollowEmbed } from "./mediaFollow.js";
@@ -79,9 +81,7 @@ async function postToPics(payload) {
   }
 }
 
-const SPORT_KEYS = new Set([
-  "kbo", "npb", "tennis", "soccer", "mma", "boxing", "mlb", "nfl", "nba", "esports", "kalshi"
-]);
+const SPORT_KEYS = new Set(sportCommandKeys());
 
 client.once(Events.ClientReady, async (c) => {
   discordReady = true;
@@ -91,7 +91,7 @@ client.once(Events.ClientReady, async (c) => {
   } catch (e) {
     console.warn("[boot] registerCommandsOnBoot:", e.message);
   }
-  client.user.setActivity("EDGE PLAY · daily engine", { type: ActivityType.Watching });
+  client.user.setActivity("EDGE PLAY · category engine", { type: ActivityType.Watching });
 
   initSnapshotIfEmpty();
 
@@ -194,10 +194,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply();
       const board = await ensureTodayCard();
       const e = new EmbedBuilder()
-        .setColor(board?.emptyBoard ? 0x95a5a6 : 0x2ecc71)
-        .setTitle(board?.emptyBoard ? "📡 BOARD · WAITING FOR GAMES" : "📡 DAILY BOARD")
+        .setColor(board?.emptyBoard || board?.noPlay ? 0x95a5a6 : 0x2ecc71)
+        .setTitle(
+          board?.emptyBoard || board?.noPlay
+            ? "📡 BOARD · NO VERIFIED PICK / WAITING"
+            : "📡 DAILY BOARD"
+        )
         .setDescription((board?.text || "No board.").slice(0, 4000))
-        .setFooter({ text: "EDGE PLAY · best available play · 21+" })
+        .setFooter({ text: "EDGE PLAY · evidence-first · 21+" })
         .setTimestamp();
       await interaction.editReply({ embeds: [e] });
       return;
@@ -207,7 +211,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply();
       const board = await rollDailyCard({ force: true });
       const e = new EmbedBuilder()
-        .setColor(board?.emptyBoard ? 0x95a5a6 : 0x2ecc71)
+        .setColor(board?.emptyBoard || board?.noPlay ? 0x95a5a6 : 0x2ecc71)
         .setTitle("🔬 FORCED SCAN COMPLETE")
         .setDescription((board?.text || "Done.").slice(0, 4000))
         .setTimestamp();
@@ -224,7 +228,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     if (name === "best") {
-      await interaction.reply({ embeds: [bestOverallEmbed()] });
+      await interaction.deferReply();
+      const emb = await bestOverallEmbed();
+      await interaction.editReply({ embeds: [emb] });
       return;
     }
     if (name === "live" || name === "picks" || name === "all") {
@@ -285,15 +291,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           [
             ...health.lines,
             "",
-            `**Board:** ${board ? (board.stale ? "STALE" : board.emptyBoard ? "WAITING FOR GAMES" : "LIVE") : "none yet"}`,
+            `**Board:** ${board ? (board.stale ? "STALE" : board.emptyBoard || board.noPlay ? "NO VERIFIED / WAITING" : "LIVE") : "none yet"}`,
             `**Tracker:** ${sum.record} (${sum.pending} pending)`,
             `**Channel:** ${config.picsChannelId ? "set" : "MISSING PICS_CHANNEL_ID"}`,
-            `**Scan interval:** ${config.scanMinutes || 15}m · PORT ${PORT}`
+            `**Scan interval:** ${config.scanMinutes || 15}m · PORT ${PORT}`,
+            `**Categories:** ${[...SPORT_KEYS].join(", ")}`
           ].join("\n")
         )
         .setFooter({ text: "EDGE PLAY · health check · 21+" })
         .setTimestamp();
       await interaction.editReply({ embeds: [e] });
+      return;
+    }
+
+    if (name === "registry") {
+      await interaction.reply({ embeds: [registryEmbed()] });
       return;
     }
 
@@ -397,19 +409,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ embeds: [kalshiEmbed()] });
         return;
       }
-      const emb = categoryEmbed(name);
-      if (emb) await interaction.reply({ embeds: [emb] });
-      else {
-        await interaction.reply({
-          content: `No desk data for **${name}**. Run \`/daily\` first.`,
-          ephemeral: true
+      await interaction.deferReply();
+      try {
+        const emb = await categoryEmbed(name);
+        await interaction.editReply({ embeds: [emb] });
+      } catch (e) {
+        await interaction.editReply({
+          content: `Category pipeline error for **${name}**: ${(e.message || "unknown").slice(0, 200)}`
         });
       }
       return;
     }
 
     if (["value", "props", "prop", "parlay", "parlays"].includes(name)) {
-      await interaction.reply({ embeds: [liveCardEmbed()] });
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x95a5a6)
+            .setTitle("🚫 NO VERIFIED PICK · " + name.toUpperCase())
+            .setDescription(
+              [
+                "**Reason:** This market category is not fully wired to a verified data + model path yet.",
+                "",
+                "Supported live ML desks: `/mlb` `/nfl` `/nba` `/nhl` `/ncaaf` `/soccer` `/tennis` `/kbo`",
+                "Use `/best` for all live categories, `/daily` for the multi-sport board.",
+                "",
+                "_Engine will not invent prop/parlay picks without a dedicated feed._"
+              ].join("\n")
+            )
+            .setFooter({ text: "EDGE PLAY · no silent skip · 21+" })
+            .setTimestamp()
+        ]
+      });
       return;
     }
 
