@@ -1,9 +1,9 @@
 /**
  * Last-chance validation before predictions reach Discord.
- * Policy: never wipe the board to NO PLAY.
+ * Policy: prefer NO PLAY over inventing confidence.
  * - False LOCKs → downgrade to LEAN
- * - Final/postponed / unnamed → drop that pick only
- * - Keep at least whatever valid LEANs remain
+ * - Final/postponed / unnamed / failed autopsy → drop that pick
+ * - Empty board is valid when evidence is insufficient
  */
 
 import { parseOddsToImplied } from "./analyticsEngine.js";
@@ -12,7 +12,7 @@ const STALE_MS = 3 * 60 * 60 * 1000;
 
 function isNamedPick(selection) {
   if (!selection || selection === "—") return false;
-  if (/process side|soft-side|board scan|NO QUALIFYING/i.test(selection)) return false;
+  if (/process side|soft-side|board scan|NO QUALIFYING|NO PLAY/i.test(selection)) return false;
   return true;
 }
 
@@ -62,12 +62,18 @@ export function validatePick(p) {
     if (p.autopsySurvived === false) reasons.push("LOCK label failed autopsy");
   }
 
+  if (tier === "NO PLAY" || p.playLevel === "NO PLAY") {
+    reasons.push("engine marked NO PLAY");
+  }
+
   if (/final|postpon|cancel/i.test(String(p.status || "") + game + selection)) {
     reasons.push("event final or postponed");
   }
 
   const hardDrop = reasons.some((r) =>
-    /final or postponed|not a named|missing event/i.test(r)
+    /final or postponed|not a named|missing event|engine marked NO PLAY|analysis older than 3h|marked stale/i.test(
+      r
+    )
   );
 
   let pick = { ...p };
@@ -75,16 +81,17 @@ export function validatePick(p) {
     return { ok: false, reasons, pick: null };
   }
 
-  // Soft issues → keep as LEAN (never empty the board)
+  // Soft issues on LOCK → downgrade to LEAN
   if (reasons.length && isLockLabel) {
     pick.tier = "LEAN";
     pick.playLevel = "LEAN";
     pick._downgraded = true;
     pick._validationReasons = reasons;
   } else if (reasons.length) {
-    pick.tier = "LEAN";
-    pick.playLevel = "LEAN";
-    pick.forced = true;
+    // Soft issues on LEAN → keep but flag; do not force if autopsy already failed
+    if (p.autopsySurvived === false || (p.dataQuality || "") === "Low") {
+      return { ok: false, reasons: [...reasons, "insufficient evidence"], pick: null };
+    }
     pick._validationReasons = reasons;
   }
 
@@ -95,7 +102,7 @@ export function validateBoard(board) {
   if (!board) {
     return {
       board: {
-        noPlay: false,
+        noPlay: true,
         emptyBoard: true,
         text: "📡 No board data yet — run /scan.",
         topPlays: [],
@@ -140,13 +147,15 @@ export function validateBoard(board) {
         .join("\n");
   }
 
+  const empty = topPlays.length + leans.length === 0;
+
   return {
     board: {
       ...board,
       topPlays,
       leans,
-      noPlay: false,
-      emptyBoard: topPlays.length + leans.length === 0,
+      noPlay: empty,
+      emptyBoard: empty,
       text,
       validatedAt: new Date().toISOString()
     },
