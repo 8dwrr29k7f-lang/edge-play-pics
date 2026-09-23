@@ -1,8 +1,7 @@
 /**
- * Standardized pick card — every prediction uses the same transparent format.
- * Driven by the multi-factor analytics engine + Prediction Autopsy.
+ * Standardized pick card — multi-factor + Market Intelligence + Autopsy.
  * NEVER forces a LOCK. Outcomes: STRONG PLAY / LEAN / NO PLAY.
- * A pick is only STRONG PLAY if it survives both the case FOR and the case AGAINST.
+ * Market section never invents lines or public %. STRONG only if FOR + AGAINST survived.
  */
 
 import {
@@ -38,16 +37,9 @@ export function confidencePct(modelProb, confLevel) {
   return pct;
 }
 
-/**
- * Core standardization — runs multi-factor engine + mandatory autopsy.
- */
 export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) {
   if (!p) {
-    return {
-      noPick: true,
-      reason: "No pick object",
-      finalLine: formatNoPlay("Missing pick data.")
-    };
+    return { noPick: true, reason: "No pick object", finalLine: formatNoPlay("Missing pick data.") };
   }
 
   const selection = (p.selection || p.pick || "")
@@ -61,9 +53,7 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
 
   if (
     !selection ||
-    /process side|soft-side|confirmed sp side|lineup-confirmed|wait sp|board scan|shop day|no forced/i.test(
-      selection
-    )
+    /process side|soft-side|confirmed sp side|lineup-confirmed|wait sp|board scan|shop day|no forced/i.test(selection)
   ) {
     return {
       noPick: true,
@@ -81,12 +71,7 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
 
   const reasoning = p.reasoning || p.analysis || {};
   const ctx = {
-    sport,
-    selection,
-    game,
-    price,
-    tier,
-    units,
+    sport, selection, game, price, tier, units,
     form: reasoning.form || p.form,
     situational: reasoning.situational || p.situational,
     supporting: reasoning.supporting || p.supporting,
@@ -100,6 +85,12 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     media: reasoning.media || p.media,
     notes: p.why || p.note,
     signals: p.signals || reasoning.signals,
+    // Market inputs (only used when actually present — never invented)
+    openPrice: p.openPrice || p.openingLine || p.open || reasoning.openPrice,
+    currentPrice: p.currentPrice || price,
+    publicPct: p.publicPct ?? p.publicPercent ?? p.betPct ?? reasoning.publicPct,
+    moneyPct: p.moneyPct ?? p.handlePct ?? reasoning.moneyPct,
+    lineMove: p.lineMove || p.movement || reasoning.lineMove,
     allowNoOdds: false
   };
 
@@ -107,8 +98,18 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
   const noPlay = ev.playLevel === "NO PLAY";
 
   const autopsyLine =
-    ev.autopsyVerdict ||
-    (ev.autopsySurvived ? "Survived adversarial review" : "Failed autopsy");
+    ev.autopsyVerdict || (ev.autopsySurvived ? "Survived adversarial review" : "Failed autopsy");
+
+  const marketBlock = ev.marketSignal || [
+    "📈 MARKET SIGNAL",
+    "• Opening: unavailable",
+    "• Current: unavailable",
+    "• Movement: unavailable",
+    "• Model probability: unavailable",
+    "• Implied probability: unavailable",
+    "• Estimated edge: unavailable",
+    "• Market information not supplied — no line or public data invented."
+  ].join("\n");
 
   const finalBlock = noPlay
     ? formatNoPlay(
@@ -137,6 +138,8 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
         "⚠️ BIGGEST RISK",
         `• ${ev.biggestRisk}`,
         "",
+        marketBlock,
+        "",
         `📊 DATA QUALITY: ${ev.dataQuality}`,
         ev.modelAgreement ? `🤖 MODEL AGREEMENT: ${ev.modelAgreement}` : null,
         `🔬 AUTOPSY: ${autopsyLine}`,
@@ -153,10 +156,8 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
 
   return {
     noPick: noPlay,
-    reason: noPlay ? "Engine returned NO PLAY (model or autopsy)" : null,
-    sport,
-    game,
-    selection,
+    reason: noPlay ? "Engine returned NO PLAY (model, market, or autopsy)" : null,
+    sport, game, selection,
     pickLine: "PICK: " + selection,
     tier: ev.playLevel,
     units: noPlay ? 0 : units,
@@ -186,6 +187,9 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     autopsyVerdict: ev.autopsyVerdict,
     autopsySeverity: ev.autopsySeverity,
     autopsySurvived: ev.autopsySurvived,
+    marketSignal: ev.marketSignal,
+    marketInterpretation: ev.marketInterpretation,
+    marketValueAssessment: ev.marketValueAssessment,
     finalLine: finalBlock,
     reasoning: ev
   };
@@ -203,11 +207,20 @@ function formatNoPlay(reason) {
     "",
     "🔥 TOP 3 REASONS",
     "• Insufficient verified statistical support",
-    "• Data quality, sample size, or autopsy failure",
+    "• Data quality, sample size, market value, or autopsy failure",
     "• Engine refuses to force a lock",
     "",
     "⚠️ BIGGEST RISK",
     `• ${reason}`,
+    "",
+    "📈 MARKET SIGNAL",
+    "• Opening: unavailable",
+    "• Current: unavailable",
+    "• Movement: unavailable",
+    "• Model probability: unavailable",
+    "• Implied probability: unavailable",
+    "• Estimated edge: unavailable",
+    "• Market information not supplied — no line or public data invented.",
     "",
     "📊 DATA QUALITY: Low",
     "🔬 AUTOPSY: Failed or not applicable",
@@ -239,15 +252,12 @@ export function formatParlayDiscord(legs) {
     if (std.noPick) return `**Leg ${i + 1}:** 🔴 NO PLAY — ${std.reason || "engine/autopsy reject"}`;
     return `**Leg ${i + 1}: ${std.selection}** — model ${std.modelProb}% · edge ${std.edge != null ? std.edge + "%" : "n/a"} · ${std.playEmoji} ${std.playLevel}`;
   });
-  const probs = legs
-    .map((L) => standardizePick(L).modelProb)
-    .filter((x) => x != null)
-    .map((x) => x / 100);
+  const probs = legs.map((L) => standardizePick(L).modelProb).filter((x) => x != null).map((x) => x / 100);
   const combined = probs.length ? probs.reduce((a, b) => a * b, 1) : null;
   return (
     parts.join("\n\n") +
     "\n\n**Combined est. probability:** " +
     (combined != null ? (combined * 100).toFixed(1) + "%" : "n/a") +
-    "\n_Combining legs multiplies uncertainty. Prefer single plays that survived autopsy._"
+    "\n_Combining legs multiplies uncertainty. Prefer single plays that survived autopsy + market check._"
   );
 }
