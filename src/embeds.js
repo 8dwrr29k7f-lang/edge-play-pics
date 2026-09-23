@@ -46,7 +46,7 @@ export function wireEmbed() {
   if (!(wireBoard.takes || []).length) {
     e.addFields({
       name: "Board",
-      value: "Empty wire — run `/daily` to populate from live ESPN scan.",
+      value: "Empty wire — run `/daily` or sport desks (`/mlb` `/nfl` … `/best`).",
       inline: false
     });
   }
@@ -56,7 +56,7 @@ export function wireEmbed() {
 export function kboEmbed() {
   const e = base(colors.take)
     .setTitle("🌅 KBO · WHAT TO TAKE")
-    .setDescription(`**${kboBoard.dateLabel || "KBO"}**\n${kboBoard.description || ""}`);
+    .setDescription(`**${kboBoard.dateLabel || "KBO"}**\n${kboBoard.description || "Use /kbo for live pipeline"}`);
 
   for (const r of kboBoard.rows || []) {
     e.addFields({
@@ -86,7 +86,7 @@ export function kboEmbed() {
 export function tennisEmbed() {
   const e = base(colors.lean)
     .setTitle(tennisBoard.title || "🎾 TENNIS")
-    .setDescription(tennisBoard.description || "No strong edges");
+    .setDescription(tennisBoard.description || "Use /tennis for live pipeline");
   for (const t of tennisBoard.takes || []) {
     e.addFields({ name: t.name, value: t.value, inline: false });
   }
@@ -111,6 +111,7 @@ export function kalshiEmbed() {
         "⏸️ **HOLD** — like the side, wait for ¢",
         "🚫 **SIT** — ≥88¢ chalk or ≥8¢ spread toxic",
         "",
+        "**NO VERIFIED PICK** from sports engine — Kalshi is guidance only.",
         "Media “locks” on Kalshi screenshots → start **HOLD**, promote only with net math."
       ].join("\n")
     );
@@ -139,23 +140,27 @@ export function helpEmbed() {
       [
         "**Daily automation (America/Chicago)**",
         "· 08:00 — full scan + board",
-        "· 12:00 / 16:00 — monitor + stale check",
+        "· 12:00 / 16:00 — monitor + stale + auto-grade",
         "· 20:00 — evening review",
         "· every SCAN_MINUTES — light reverify",
         "",
         "**Core**",
-        "`/daily` `/scan` — ESPN evidence board",
+        "`/daily` `/scan` — multi-sport ESPN board",
         "`/lotd` `/locks` `/best` `/live` — process cards",
-        "`/status` — system health",
+        "`/status` `/registry` — health + category map",
+        "",
+        "**Live category desks (pipeline)**",
+        "`/mlb` `/nfl` `/nba` `/nhl` `/ncaaf` `/soccer` `/tennis` `/kbo`",
+        "Each runs: DATA → MODEL → ANALYSIS → PICK or **NO VERIFIED PICK**",
+        "",
+        "**Offline desks (explicit NO VERIFIED PICK)**",
+        "`/npb` `/mma` `/boxing` `/esports` — no feed wired yet",
+        "`/kalshi` — guidance labels only",
         "",
         "**Tracker**",
         "`/track` `/pending` `/logpick` `/grade` `/review` `/learn`",
         "",
-        "**Desk**",
-        "`/lean` `/hold` `/media` `/hedge` `/limits` `/scores`",
-        "`/mlb` `/nfl` `/nba` … sport desks",
-        "",
-        "Engine never forces a LOCK. NO PLAY is valid.",
+        "Engine never invents picks. NO PLAY is valid.",
         "21+ · 1-800-GAMBLER"
       ].join("\n")
     );
