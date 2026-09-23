@@ -43,7 +43,8 @@ function probeEngine() {
     if (imp.implied == null || Math.abs(imp.implied - 0.5238) > 0.01) {
       return { ok: false, detail: "odds math failed" };
     }
-    const ev = evaluateMatchup({
+    // Weak case must still return a LEAN (forced play policy)
+    const weak = evaluateMatchup({
       sport: "NFL",
       selection: "TEST ML",
       game: "A @ B",
@@ -53,10 +54,29 @@ function probeEngine() {
       missing: "injury uncertainty",
       allowNoOdds: true
     });
-    if (ev.playLevel !== "NO PLAY") {
-      return { ok: false, detail: "gate failed — weak case should be NO PLAY" };
+    if (weak.playLevel === "NO PLAY") {
+      return { ok: false, detail: "policy fail — weak named pick should be LEAN not NO PLAY" };
     }
-    return { ok: true, detail: "gates + odds math OK" };
+    if (weak.playLevel === "STRONG PLAY") {
+      return { ok: false, detail: "gate fail — weak case must not be LOCK" };
+    }
+    // Strong case can be STRONG PLAY or LEAN depending on thresholds
+    const strong = evaluateMatchup({
+      sport: "NFL",
+      selection: "PHI ML",
+      game: "DAL @ PHI",
+      price: "-120",
+      form: "PHI 8-2 elite form dominant",
+      supporting: "PHI holds stronger season record vs DAL clear edge",
+      situational: "Home",
+      sampleNote: "full season sample available",
+      missing: "",
+      allowNoOdds: false
+    });
+    if (!strong.playLevel || strong.playLevel === "NO PLAY") {
+      return { ok: false, detail: "strong case should not be NO PLAY" };
+    }
+    return { ok: true, detail: "odds math + force-play policy OK" };
   } catch (e) {
     return { ok: false, detail: e.message };
   }
@@ -85,9 +105,6 @@ function icon(ok) {
   return "⚪";
 }
 
-/**
- * @param {{ discordReady?: boolean, schedulerArmed?: boolean }} opts
- */
 export async function runHealthCheck(opts = {}) {
   const [espn, odds] = await Promise.all([probeEspn(), probeOddsApi()]);
   const engine = probeEngine();
@@ -101,15 +118,7 @@ export async function runHealthCheck(opts = {}) {
     detail: opts.schedulerArmed === false ? "not armed" : "cron + interval armed"
   };
 
-  const components = {
-    discord,
-    espn,
-    odds,
-    engine,
-    database: db,
-    scheduler
-  };
-
+  const components = { discord, espn, odds, engine, database: db, scheduler };
   const criticalDown = [discord, espn, engine, db].some((c) => c.ok === false);
 
   return {
