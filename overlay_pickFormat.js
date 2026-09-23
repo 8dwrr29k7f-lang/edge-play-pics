@@ -1,5 +1,5 @@
 /**
- * Standardized pick card — multi-factor + Market Intelligence + Autopsy.
+ * Standardized pick card — multi-factor + Market Intelligence + What-If + Autopsy.
  * NEVER forces a LOCK. Outcomes: STRONG PLAY / LEAN / NO PLAY.
  * Market section never invents lines or public %. STRONG only if FOR + AGAINST survived.
  */
@@ -85,7 +85,6 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     media: reasoning.media || p.media,
     notes: p.why || p.note,
     signals: p.signals || reasoning.signals,
-    // Market inputs (only used when actually present — never invented)
     openPrice: p.openPrice || p.openingLine || p.open || reasoning.openPrice,
     currentPrice: p.currentPrice || price,
     publicPct: p.publicPct ?? p.publicPercent ?? p.betPct ?? reasoning.publicPct,
@@ -140,6 +139,8 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
         "",
         marketBlock,
         "",
+        ev.whatIfBlock || null,
+        "",
         `📊 DATA QUALITY: ${ev.dataQuality}`,
         ev.modelAgreement ? `🤖 MODEL AGREEMENT: ${ev.modelAgreement}` : null,
         `🔬 AUTOPSY: ${autopsyLine}`,
@@ -190,6 +191,9 @@ export function standardizePick(p, { lotd = false, dataFreshness = null } = {}) 
     marketSignal: ev.marketSignal,
     marketInterpretation: ev.marketInterpretation,
     marketValueAssessment: ev.marketValueAssessment,
+    whatIfClassification: ev.whatIfClassification,
+    whatIfNote: ev.whatIfNote,
+    whatIfBlock: ev.whatIfBlock,
     finalLine: finalBlock,
     reasoning: ev
   };
@@ -238,7 +242,7 @@ export function formatStandardDiscord(std, { compact = false } = {}) {
     return [
       `${std.playEmoji || "🎯"} **${std.selection}**`,
       `📊 ${std.confidencePct ?? "—"}% · 💰 ${std.oddsDisplay} · 📈 ${std.edge != null ? (std.edge >= 0 ? "+" : "") + std.edge + "%" : "n/a"}`,
-      `${std.playEmoji} ${std.playLevel} · ${std.units}u · DQ ${std.dataQuality}${std.autopsySurvived === false ? " · autopsy↓" : ""}`
+      `${std.playEmoji} ${std.playLevel} · ${std.units}u · DQ ${std.dataQuality}${std.whatIfClassification ? " · " + std.whatIfClassification : ""}${std.autopsySurvived === false ? " · autopsy↓" : ""}`
     ].join("\n");
   }
 
