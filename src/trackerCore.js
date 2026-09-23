@@ -206,7 +206,11 @@ export function ingestLivePicks(picks = []) {
       game: p.game || "",
       eventId: p.eventId || "",
       reasons: Array.isArray(p.reasoning) ? p.reasoning.join("; ") : String(p.reasons || ""),
-      created: new Date().toISOString()
+      created: new Date().toISOString(),
+      modelVersion: p.modelVersion || null,
+      predictionVersion: p.predictionVersion || 1,
+      dataSnapshotAt: p.analyzedAt || p.lastVerified || new Date().toISOString(),
+      history: [{ version: p.predictionVersion || 1, at: new Date().toISOString(), action: "created", tier: p.tier || p.label || "LEAN" }]
     });
     added++;
   }
@@ -256,7 +260,7 @@ export function autoGradeFromFinals(finals = []) {
       else if (match.home.score != null && match.away.score != null) {
         if (match.home.score > match.away.score) won = true;
         else if (match.home.score < match.away.score) won = false;
-        else won = null; // push unlikely for ML but treat as unresolved
+        else won = null;
       }
     } else if (teamAbbr === awayA) {
       if (match.away.winner === true) won = true;
