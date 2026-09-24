@@ -1,9 +1,8 @@
 /**
  * Daily auto card — wires dailyEngine into desk state
- * Single path: pipeline → validate → desk memory → Discord consumers
- * Evidence-first: NO PLAY / empty board when evidence is insufficient.
+ * Full card path: pipeline → validate → desk memory → multi-embed Discord
  */
-import { runDailyPipeline, getCurrentBoard } from "./dailyEngine.js";
+import { runDailyPipeline, getCurrentBoard, boardToEmbedPayloads } from "./dailyEngine.js";
 import { lockOfTheDay, liveCard } from "./data/desk.js";
 import { validateBoard } from "./validatePublish.js";
 
@@ -84,11 +83,17 @@ export async function rollDailyCard({ force = false } = {}) {
   try {
     const { board: raw } = await runDailyPipeline({ force });
     const { board, rejected } = validateBoard(raw);
-    if (rejected.length) {
+    if (rejected?.length) {
       console.warn("validateBoard rejected/downgraded:", rejected.slice(0, 8).join(" | "));
     }
-    lastBoard = board;
+    board.watch = raw.watch || board.watch || [];
+    board.bySport = raw.bySport || board.bySport || {};
+    board.sections = raw.sections || board.sections;
+    if (!board.sections && board.text) {
+      board.sections = { summary: board.text, locks: "", leans: "", watch: "" };
+    }
 
+    lastBoard = board;
     liveCard.dateLabel = board.stamp || "Today";
     liveCard.picks = [];
     for (const p of board.topPlays || []) {
@@ -99,11 +104,8 @@ export async function rollDailyCard({ force = false } = {}) {
     }
 
     const head = board.topPlays?.[0] || board.leans?.[0];
-    if (head) {
-      setLotd(head, board.stamp);
-    } else {
-      clearLotd();
-    }
+    if (head) setLotd(head, board.stamp);
+    else clearLotd();
 
     return board;
   } catch (e) {
@@ -114,7 +116,14 @@ export async function rollDailyCard({ force = false } = {}) {
       text: "📡 Scan failed — " + e.message + "\nWill retry on next schedule or /scan.",
       error: e.message,
       topPlays: [],
-      leans: []
+      leans: [],
+      watch: [],
+      sections: {
+        summary: "📡 Scan failed — " + e.message,
+        locks: "",
+        leans: "",
+        watch: ""
+      }
     };
   }
 }
@@ -140,3 +149,5 @@ export async function ensureTodayCard() {
 export function getLastBoard() {
   return lastBoard || getCurrentBoard();
 }
+
+export { boardToEmbedPayloads };
