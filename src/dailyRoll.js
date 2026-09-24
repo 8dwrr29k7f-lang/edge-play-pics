@@ -86,6 +86,7 @@ export async function rollDailyCard({ force = false } = {}) {
     if (rejected?.length) {
       console.warn("validateBoard rejected/downgraded:", rejected.slice(0, 8).join(" | "));
     }
+    // Preserve watch / sections from raw if validate stripped structure
     board.watch = raw.watch || board.watch || [];
     board.bySport = raw.bySport || board.bySport || {};
     board.sections = raw.sections || board.sections;

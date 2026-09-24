@@ -3,7 +3,7 @@
  */
 import { EmbedBuilder } from "discord.js";
 import { rollDailyCard, getLastBoard } from "./dailyRoll.js";
-import { reverifyPicks, getCurrentBoard, boardToEmbedPayloads } from "./dailyEngine.js";
+import { reverifyPicks, getCurrentBoard } from "./dailyEngine.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -62,6 +62,7 @@ export async function morningBundle() {
   dedupe.morningPosted = key;
   saveDedupe(dedupe);
 
+  const { boardToEmbedPayloads } = await import("./dailyEngine.js");
   const payloads = boardToEmbedPayloads(board);
   if (!payloads.length) {
     const waiting = !!board.emptyBoard || !!board.noPlay;
@@ -73,14 +74,17 @@ export async function morningBundle() {
       .setTimestamp();
     return [{ embeds: [e] }];
   }
+  // Prefix first embed title with morning marker
   const embeds = payloads.slice(0, 8).map((pl, i) => {
-    return new EmbedBuilder()
+    const e = new EmbedBuilder()
       .setColor(pl.color)
       .setTitle(i === 0 ? `🌅 ${pl.title}` : pl.title)
       .setDescription(pl.description)
       .setFooter({ text: pl.footer || "EDGE PLAY · full daily card · 21+" })
       .setTimestamp();
+    return e;
   });
+  // Discord allows up to 10 embeds per message; split if needed
   const out = [];
   for (let i = 0; i < embeds.length; i += 10) {
     out.push({ embeds: embeds.slice(i, i + 10) });
