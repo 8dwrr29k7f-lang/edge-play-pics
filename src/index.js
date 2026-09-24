@@ -28,7 +28,7 @@ import {
 } from "./announce.js";
 import { learnEmbed, enhanceReviewEmbed } from "./trackerLearn.js";
 import { rollDailyCard, ensureTodayCard } from "./dailyRoll.js";
-import { getCurrentBoard, getTrackerSummary, reverifyPicks } from "./dailyEngine.js";
+import { getCurrentBoard, getTrackerSummary, reverifyPicks, boardToEmbedPayloads } from "./dailyEngine.js";
 import { registerCommandsOnBoot } from "./registerOnBoot.js";
 import {
   logPick,
@@ -193,29 +193,50 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (name === "daily" || name === "card" || name === "roll") {
       await interaction.deferReply();
       const board = await ensureTodayCard();
-      const e = new EmbedBuilder()
-        .setColor(board?.emptyBoard || board?.noPlay ? 0x95a5a6 : 0x2ecc71)
-        .setTitle(
-          board?.emptyBoard || board?.noPlay
-            ? "📡 BOARD · NO VERIFIED PICK / WAITING"
-            : "📡 DAILY BOARD"
-        )
-        .setDescription((board?.text || "No board.").slice(0, 4000))
-        .setFooter({ text: "EDGE PLAY · evidence-first · 21+" })
-        .setTimestamp();
-      await interaction.editReply({ embeds: [e] });
+      const payloads = boardToEmbedPayloads(board);
+      const embeds = payloads.slice(0, 10).map((pl) =>
+        new EmbedBuilder()
+          .setColor(pl.color)
+          .setTitle(pl.title)
+          .setDescription(pl.description)
+          .setFooter({ text: pl.footer || "EDGE PLAY · full daily card · 21+" })
+          .setTimestamp()
+      );
+      if (!embeds.length) {
+        embeds.push(
+          new EmbedBuilder()
+            .setColor(0x95a5a6)
+            .setTitle("📡 BOARD · EMPTY")
+            .setDescription("No board data yet. Run `/scan`.")
+            .setTimestamp()
+        );
+      }
+      await interaction.editReply({ embeds: embeds.slice(0, 10) });
       return;
     }
 
     if (name === "scan") {
       await interaction.deferReply();
       const board = await rollDailyCard({ force: true });
-      const e = new EmbedBuilder()
-        .setColor(board?.emptyBoard || board?.noPlay ? 0x95a5a6 : 0x2ecc71)
-        .setTitle("🔬 FORCED SCAN COMPLETE")
-        .setDescription((board?.text || "Done.").slice(0, 4000))
-        .setTimestamp();
-      await interaction.editReply({ embeds: [e] });
+      const payloads = boardToEmbedPayloads(board);
+      const embeds = payloads.slice(0, 10).map((pl, i) =>
+        new EmbedBuilder()
+          .setColor(pl.color)
+          .setTitle(i === 0 ? `🔬 SCAN · ${pl.title}` : pl.title)
+          .setDescription(pl.description)
+          .setFooter({ text: pl.footer || "EDGE PLAY · full daily card · 21+" })
+          .setTimestamp()
+      );
+      if (!embeds.length) {
+        embeds.push(
+          new EmbedBuilder()
+            .setColor(0x95a5a6)
+            .setTitle("🔬 SCAN COMPLETE")
+            .setDescription((board?.text || "Done.").slice(0, 4000))
+            .setTimestamp()
+        );
+      }
+      await interaction.editReply({ embeds: embeds.slice(0, 10) });
       return;
     }
 
