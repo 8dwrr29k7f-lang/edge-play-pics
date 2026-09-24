@@ -1,16 +1,20 @@
 /**
- * DAILY SPORTS ANALYTICS ENGINE (v10 PRODUCTION)
- * SCAN → ANALYZE → FILTER → VALIDATE → PUBLISH → MONITOR → AUTO-GRADE → LEARN
+ * DAILY SPORTS ANALYTICS ENGINE (v12 FULL CARD)
+ * SCAN → ANALYZE → FILTER → VALIDATE → PUBLISH → MONITOR → AUTO-GRADE
  *
- * POLICY:
- * - Publish LOCK only when evidence is strong
- * - Publish LEAN when evidence is adequate
- * - Prefer NO PLAY / empty board over inventing confidence
- * - Never fabricate odds, injuries, lineups, or results
- * - Auto-detect wins/losses from ESPN finals when possible
+ * Full daily card: every live sport scanned, LOCKS + LEANS + WATCH with analysis.
+ * Prefer NO PLAY over inventing confidence — but never hide analysis that exists.
  */
 import { evaluateMatchup } from "./analyticsEngine.js";
 import { ingestLivePicks, autoGradeFromFinals } from "./trackerCore.js";
+import {
+  FEEDS,
+  liveFeedKeys,
+  fetchEspnBoard,
+  todayYYYYMMDD,
+  isoNow,
+  nowStamp
+} from "./feeds.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -19,26 +23,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = path.join(__dirname, "data", "dailyState.json");
 const TRACKER_PATH = path.join(__dirname, "data", "tracker.json");
 
-const FEEDS = {
-  mlb: { url: "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard", sport: "MLB" },
-  nfl: { url: "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard", sport: "NFL" },
-  nba: { url: "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard", sport: "NBA" },
-  nhl: { url: "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard", sport: "NHL" },
-  ncaaf: { url: "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard", sport: "NCAAF" }
-};
-
-const MIN_EDGE_LOCK = 3.5;
-const MIN_MODEL_LOCK = 0.57;
-const MIN_EDGE_LEAN = 1.0;
-const MIN_MODEL_LEAN = 0.53;
+const MIN_EDGE_LOCK = 3.0;
+const MIN_MODEL_LOCK = 0.56;
 const STALE_MS = 3 * 60 * 60 * 1000;
+const MODEL_VERSION = "analyticsEngine-v11.1";
 
-function nowStamp() {
-  return new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour12: true });
-}
-function isoNow() {
-  return new Date().toISOString();
-}
+// Full-card capacity (was 5 locks / 8 leans — too thin for a real desk)
+const MAX_LOCKS = 12;
+const MAX_LEANS = 24;
+const MAX_WATCH = 20;
 
 function loadState() {
   try {
@@ -56,28 +49,7 @@ function saveState(state) {
 }
 
 async function fetchBoard(url, dates) {
-  let u = url;
-  if (dates) u += (u.includes("?") ? "&" : "?") + "dates=" + dates;
-  const res = await fetch(u, {
-    signal: AbortSignal.timeout(12000),
-    headers: { "User-Agent": "EDGE-PLAY-PICS/4.4" }
-  });
-  if (!res.ok) throw new Error("ESPN " + res.status);
-  return res.json();
-}
-
-function todayYYYYMMDD() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  return (
-    parts.find((p) => p.type === "year").value +
-    parts.find((p) => p.type === "month").value +
-    parts.find((p) => p.type === "day").value
-  );
+  return fetchEspnBoard(url, dates, 14000);
 }
 
 function parseRecord(summary) {
@@ -87,8 +59,33 @@ function parseRecord(summary) {
   const w = +m[1],
     l = +m[2],
     total = w + l;
-  if (total < 5) return { w, l, pct: 0.5, thin: true };
-  return { w, l, pct: w / total, thin: total < 20 };
+  if (total < 5) return { w, l, pct: 0.5, thin: true, total };
+  return { w, l, pct: w / total, thin: total < 15, total };
+}
+
+function extractTeamOdds(oddsArr, homeAway) {
+  if (!oddsArr?.length) return null;
+  const o = oddsArr[0] || {};
+  if (homeAway === "home" && o.homeTeamOdds?.moneyLine != null) {
+    const n = Number(o.homeTeamOdds.moneyLine);
+    return Number.isFinite(n) ? (n > 0 ? "+" + n : String(n)) : null;
+  }
+  if (homeAway === "away" && o.awayTeamOdds?.moneyLine != null) {
+    const n = Number(o.awayTeamOdds.moneyLine);
+    return Number.isFinite(n) ? (n > 0 ? "+" + n : String(n)) : null;
+  }
+  if (homeAway === "home" && o.homeOdds?.moneyLine != null) {
+    const n = Number(o.homeOdds.moneyLine);
+    return Number.isFinite(n) ? (n > 0 ? "+" + n : String(n)) : null;
+  }
+  if (homeAway === "away" && o.awayOdds?.moneyLine != null) {
+    const n = Number(o.awayOdds.moneyLine);
+    return Number.isFinite(n) ? (n > 0 ? "+" + n : String(n)) : null;
+  }
+  if (o.details && /^[+\-]?\d{3,4}$/.test(String(o.details).trim())) {
+    return String(o.details).trim();
+  }
+  return null;
 }
 
 function buildCtxFromEvent(ev, sportKey) {
@@ -100,85 +97,112 @@ function buildCtxFromEvent(ev, sportKey) {
   let home = null,
     away = null;
   for (const c of competitors) {
-    const team = c.team || {};
-    const rec =
-      (c.records || []).find((r) => r.type === "total" || r.name === "overall") ||
-      (c.records || [])[0];
-    const parsed = parseRecord(rec?.summary);
+    const team = c.team || c.athlete || {};
+    const abbr = team.abbreviation || team.shortDisplayName || team.displayName || "?";
+    const record = parseRecord((c.records || [])[0]?.summary || c.record);
     const obj = {
-      abbr: team.abbreviation || team.shortDisplayName || "?",
-      name: team.displayName || team.name || "?",
-      record: rec?.summary || "—",
-      pct: parsed?.pct ?? 0.5,
-      thin: parsed?.thin ?? true,
-      homeAway: c.homeAway
+      abbr,
+      name: team.displayName || team.name || abbr,
+      record,
+      isHome: c.homeAway === "home",
+      score: c.score != null ? Number(c.score) : null
     };
     if (c.homeAway === "home") home = obj;
     else away = obj;
   }
   if (!home || !away) return null;
-  const game = `${away.abbr} @ ${home.abbr}`;
-  const oddsArr = comp.odds || [];
-  const price = oddsArr[0]?.details || null;
-  const form = `${away.abbr} ${away.record} (pct ${(away.pct * 100).toFixed(0)}%) · ${home.abbr} ${home.record} (pct ${(home.pct * 100).toFixed(0)}%)`;
-  const situational = `Public ESPN board · ${status} · ${ev.date || ""} · venue ${(comp.venue || {}).fullName || "—"}`;
-  const sampleNote =
-    away.thin || home.thin
-      ? "thin sample / limited games in record"
-      : "season record sample available";
-  const missing =
-    "No verified injury report, lineup confirmation, or live market depth from this feed. Odds may be unavailable.";
-  const mk = (side, other) => ({
-    selection: `${side.abbr} ML`,
-    game,
-    sport: sportKey.toUpperCase(),
-    price: price || "—",
-    tier: "LEAN",
-    form,
-    situational,
-    sampleNote,
-    missing,
-    supporting:
-      side.pct >= other.pct + 0.08
-        ? `${side.abbr} holds stronger season record vs ${other.abbr}`
-        : `Close season records — limited edge from standings alone`,
-    opposing:
-      "Record edge alone is weak; injuries/lineups/odds not verified on this scan",
-    openPrice: null,
-    currentPrice: price,
+
+  const oddsArr = comp.odds || ev.odds || [];
+  const homeMl = extractTeamOdds(oddsArr, "home");
+  const awayMl = extractTeamOdds(oddsArr, "away");
+
+  const homePct = home.record?.pct ?? 0.5;
+  const awayPct = away.record?.pct ?? 0.5;
+  const recordGap = Math.abs(homePct - awayPct);
+
+  const candidates = [];
+  // Home side
+  candidates.push({
+    sport: sportKey,
+    selection: home.abbr,
+    game: `${away.abbr} @ ${home.abbr}`,
+    price: homeMl,
+    form: home.record
+      ? `${home.record.w}-${home.record.l}${home.record.thin ? " (thin)" : ""}`
+      : null,
+    situational: status,
+    sampleNote: home.record?.thin ? "thin sample" : null,
+    missing: !homeMl ? ["odds"] : [],
+    supporting: null,
+    opposing: null,
+    openPrice: homeMl,
+    currentPrice: homeMl,
+    recordGap,
+    sidePct: homePct,
+    isHome: true,
     eventId: ev.id,
-    status,
     analyzedAt: isoNow(),
-    lastVerified: isoNow(),
-    _sidePct: side.pct,
-    _otherPct: other.pct,
-    _recordGap: side.pct - other.pct
+    _recordGap: recordGap,
+    _sidePct: homePct
   });
-  return {
-    game,
-    sport: sportKey.toUpperCase(),
-    status,
-    candidates: [mk(home, away), mk(away, home)],
+  // Away side
+  candidates.push({
+    sport: sportKey,
+    selection: away.abbr,
+    game: `${away.abbr} @ ${home.abbr}`,
+    price: awayMl,
+    form: away.record
+      ? `${away.record.w}-${away.record.l}${away.record.thin ? " (thin)" : ""}`
+      : null,
+    situational: status,
+    sampleNote: away.record?.thin ? "thin sample" : null,
+    missing: !awayMl ? ["odds"] : [],
+    supporting: null,
+    opposing: null,
+    openPrice: awayMl,
+    currentPrice: awayMl,
+    recordGap,
+    sidePct: awayPct,
+    isHome: false,
     eventId: ev.id,
-    date: ev.date
+    analyzedAt: isoNow(),
+    _recordGap: recordGap,
+    _sidePct: awayPct
+  });
+
+  return {
+    sport: sportKey,
+    eventId: ev.id,
+    game: `${away.abbr} @ ${home.abbr}`,
+    status,
+    candidates,
+    home,
+    away
   };
 }
 
-export async function dailyScan({ sports = ["mlb", "nfl", "nba", "nhl"] } = {}) {
+export async function dailyScan(opts = {}) {
   const dateKey = todayYYYYMMDD();
+  const keys = liveFeedKeys();
   const events = [];
   const errors = [];
-  for (const key of sports) {
+  const perSport = {};
+
+  for (const key of keys) {
     const feed = FEEDS[key];
     if (!feed) continue;
+    perSport[key] = { scanned: 0, error: null };
     try {
       const data = await fetchBoard(feed.url, dateKey);
-      for (const ev of data.events || []) {
-        const built = buildCtxFromEvent(ev, key);
-        if (built) events.push(built);
+      const list = data.events || [];
+      perSport[key].scanned = list.length;
+      for (const ev of list) {
+        const ctx = buildCtxFromEvent(ev, feed.sport);
+        if (ctx) events.push(ctx);
       }
     } catch (e) {
       errors.push(`${key}: ${e.message}`);
+      perSport[key].error = e.message;
     }
   }
   return {
@@ -187,7 +211,10 @@ export async function dailyScan({ sports = ["mlb", "nfl", "nba", "nhl"] } = {}) 
     dateKey,
     eventCount: events.length,
     events,
-    errors
+    errors,
+    perSport,
+    sportsScanned: keys,
+    modelVersion: MODEL_VERSION
   };
 }
 
@@ -200,12 +227,48 @@ function rankScore(item) {
   return model * 100 + edge + gap * 20 + dq * 100;
 }
 
+function classifyItem(evRes) {
+  // LOCK — strict
+  if (
+    evRes.playLevel === "STRONG PLAY" &&
+    (evRes.edge == null || evRes.edge >= MIN_EDGE_LOCK) &&
+    evRes.modelProb >= MIN_MODEL_LOCK &&
+    evRes.autopsySurvived !== false &&
+    (evRes.dataQuality === "High" || evRes.dataQuality === "Medium") &&
+    !(evRes.redFlags || []).some((f) =>
+      /injury|unknown lineup|thin sample/i.test(f)
+    )
+  ) {
+    return "LOCK";
+  }
+  // LEAN — engine LEAN or solid STRONG that missed lock bar
+  if (evRes.playLevel === "LEAN" || evRes.playLevel === "STRONG PLAY") {
+    return "LEAN";
+  }
+  // WATCH — meaningful analysis but not a ticket yet (full card visibility)
+  if (
+    (evRes.modelProb != null && evRes.modelProb >= 0.52) ||
+    (evRes.probabilityPct != null && evRes.probabilityPct >= 52)
+  ) {
+    return "WATCH";
+  }
+  return "NO PLAY";
+}
+
 export function analyzeCandidates(scanResult) {
   const topPlays = [];
   const leans = [];
+  const watch = [];
   const noPlays = [];
+  const bySport = {};
 
   for (const ev of scanResult.events || []) {
+    const sport = (ev.sport || "UNK").toUpperCase();
+    if (!bySport[sport]) {
+      bySport[sport] = { events: 0, locks: [], leans: [], watch: [], noPlay: 0 };
+    }
+    bySport[sport].events++;
+
     let bestForEvent = null;
     for (const cand of ev.candidates || []) {
       const ctx = {
@@ -220,7 +283,10 @@ export function analyzeCandidates(scanResult) {
         supporting: cand.supporting,
         opposing: cand.opposing,
         openPrice: cand.openPrice,
-        currentPrice: cand.currentPrice
+        currentPrice: cand.currentPrice,
+        recordGap: cand.recordGap ?? cand._recordGap,
+        sidePct: cand.sidePct ?? cand._sidePct,
+        isHome: cand.isHome
       };
       const evRes = evaluateMatchup(ctx);
       const item = {
@@ -240,170 +306,260 @@ export function analyzeCandidates(scanResult) {
         dataStatus: evRes.dataStatus,
         analyzedAt: cand.analyzedAt,
         lastVerified: isoNow(),
-        createdAt: evRes.createdAt || cand.analyzedAt
+        createdAt: evRes.createdAt || cand.analyzedAt,
+        modelVersion: MODEL_VERSION,
+        predictionVersion: 1
       };
 
-      if (evRes.playLevel === "STRONG PLAY") {
-        const isLock =
-          (evRes.edge == null || evRes.edge >= MIN_EDGE_LOCK) &&
-          evRes.modelProb >= MIN_MODEL_LOCK &&
-          evRes.autopsySurvived !== false &&
-          (evRes.dataQuality === "High" || evRes.dataQuality === "Medium") &&
-          !(evRes.redFlags || []).some((f) =>
-            /injury|unknown lineup|missing odds|thin sample/i.test(f)
-          );
-        if (isLock) {
-          item.tier = "LOCK";
-          item.playLevel = "STRONG PLAY";
-          item.forced = false;
-        } else {
-          item.tier = "LEAN";
-          item.playLevel = "LEAN";
-          item.forced = false;
-        }
-      } else if (evRes.playLevel === "LEAN") {
-        item.tier = "LEAN";
-        item.forced = false;
+      const tier = classifyItem(evRes);
+      item.tier = tier;
+      if (tier === "LOCK") {
+        item.playLevel = "STRONG PLAY";
+      } else if (tier === "LEAN") {
+        item.playLevel = "LEAN";
+      } else if (tier === "WATCH") {
+        item.playLevel = "WATCH";
       } else {
-        item.tier = "NO PLAY";
         item.playLevel = "NO PLAY";
-        item.forced = false;
       }
 
-      if (item.playLevel !== "NO PLAY") {
+      if (tier !== "NO PLAY") {
         if (!bestForEvent || rankScore(item) > rankScore(bestForEvent)) {
           bestForEvent = item;
         }
       } else {
         noPlays.push(item);
+        bySport[sport].noPlay++;
       }
     }
+
     if (bestForEvent) {
-      if (bestForEvent.tier === "LOCK") topPlays.push(bestForEvent);
-      else leans.push(bestForEvent);
+      if (bestForEvent.tier === "LOCK") {
+        topPlays.push(bestForEvent);
+        bySport[sport].locks.push(bestForEvent);
+      } else if (bestForEvent.tier === "LEAN") {
+        leans.push(bestForEvent);
+        bySport[sport].leans.push(bestForEvent);
+      } else if (bestForEvent.tier === "WATCH") {
+        watch.push(bestForEvent);
+        bySport[sport].watch.push(bestForEvent);
+      }
     }
   }
 
   topPlays.sort((a, b) => rankScore(b) - rankScore(a));
   leans.sort((a, b) => rankScore(b) - rankScore(a));
+  watch.sort((a, b) => rankScore(b) - rankScore(a));
 
   return {
-    topPlays: topPlays.slice(0, 5),
-    leans: leans.slice(0, 8),
-    noPlays: noPlays.slice(0, 10),
+    topPlays: topPlays.slice(0, MAX_LOCKS),
+    leans: leans.slice(0, MAX_LEANS),
+    watch: watch.slice(0, MAX_WATCH),
+    noPlays: noPlays.slice(0, 15),
+    bySport,
     forcedPlay: null,
     qualifying: topPlays.length + leans.length > 0,
     eventCount: (scanResult.events || []).length
   };
 }
 
-export function buildDailyBoard(analysis, scanMeta) {
+function formatPickLine(p, label) {
   const lines = [];
-  lines.push("━━━━━━━━━━━━━━━━━━");
-  lines.push(`📡 DAILY BOARD · ${scanMeta.stamp || nowStamp()} CT`);
-  lines.push("━━━━━━━━━━━━━━━━━━");
+  lines.push(`**${label} · ${p.selection}** · ${p.game} · ${p.sport}`);
   lines.push(
-    `Scanned ${scanMeta.eventCount || 0} events · Evidence-first (NO PLAY when data is thin)`
+    `Model **${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}** · Odds **${p.price || "—"}** · Edge **${p.edge != null ? (p.edge >= 0 ? "+" : "") + p.edge + "%" : "n/a"}** · DQ **${p.dataQuality || "—"}`
   );
-  lines.push("");
+  if (p.top3?.length) {
+    lines.push("Analysis: " + p.top3.slice(0, 3).map((r) => `• ${r}`).join(" "));
+  }
+  if (p.biggestRisk) lines.push(`Risk: ${p.biggestRisk}`);
+  if (p.form) lines.push(`Form: ${String(p.form).slice(0, 120)}`);
+  return lines.join("\n");
+}
 
-  if (!analysis.qualifying) {
-    lines.push("📡 BOARD STATUS");
-    if ((scanMeta.eventCount || 0) === 0) {
-      lines.push("No live games on the ESPN boards right now.");
-      lines.push("Bot will publish when events appear and evidence supports a side.");
+export function buildDailyBoard(analysis, scanMeta) {
+  const locks = analysis.topPlays || [];
+  const leans = analysis.leans || [];
+  const watch = analysis.watch || [];
+  const bySport = analysis.bySport || {};
+  const sportsList = scanMeta.sportsScanned || Object.keys(bySport);
+
+  const summary = [];
+  summary.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  summary.push(`📡 FULL DAILY CARD · ${scanMeta.stamp || nowStamp()} CT`);
+  summary.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  summary.push(
+    `Scanned **${scanMeta.eventCount || 0}** events across **${(sportsList || []).length}** sports`
+  );
+  summary.push(
+    `🔒 LOCKS: **${locks.length}** · ⭐ LEANS: **${leans.length}** · 👁 WATCH: **${watch.length}**`
+  );
+  if (scanMeta.errors?.length) {
+    summary.push(`Feed notes: ${scanMeta.errors.slice(0, 4).join("; ")}`);
+  }
+  summary.push("");
+
+  // Sport coverage map — always full card visibility
+  summary.push("**SPORT COVERAGE**");
+  for (const key of sportsList || []) {
+    const sp = String(key).toUpperCase();
+    const b = bySport[sp] || bySport[key] || {};
+    const nEvents = b.events ?? scanMeta.perSport?.[key]?.scanned ?? 0;
+    const err = scanMeta.perSport?.[key]?.error;
+    if (err) {
+      summary.push(`• ${sp}: feed error — ${err}`);
     } else {
-      lines.push("🚫 NO PLAY — insufficient verified evidence for a supported selection.");
-      lines.push("Games exist, but injuries/lineups/odds/sample quality do not clear the bar.");
-      lines.push("A lack of a pick is preferable to inventing confidence.");
+      summary.push(
+        `• ${sp}: ${nEvents} games · 🔒${(b.locks || []).length} · ⭐${(b.leans || []).length} · 👁${(b.watch || []).length}`
+      );
     }
-    lines.push("Run `/scan` after more information is confirmed.");
-    lines.push("");
-    lines.push("🕐 CREATED: " + (scanMeta.scannedAt || isoNow()));
-    lines.push("🔄 LAST VERIFIED: " + nowStamp());
-    lines.push("📡 DATA STATUS: ESPN public scoreboard only");
-    lines.push("");
-    lines.push("_Not a guarantee of outcomes. 21+ · 1-800-GAMBLER_");
+  }
+  summary.push("");
+
+  if (!analysis.qualifying && !watch.length) {
+    summary.push("**BOARD STATUS**");
+    if ((scanMeta.eventCount || 0) === 0) {
+      summary.push("No live games on ESPN boards right now.");
+      summary.push("Card will fill when events appear and evidence supports a side.");
+    } else {
+      summary.push("No LOCK/LEAN cleared the evidence bar after full multi-sport analysis.");
+      summary.push("Silence preferred over inventing confidence.");
+    }
+    summary.push("");
+    summary.push(`🕐 CREATED: ${scanMeta.scannedAt || isoNow()}`);
+    summary.push(`🔄 LAST VERIFIED: ${nowStamp()}`);
+    summary.push(`📡 DATA: ESPN public · model ${MODEL_VERSION}`);
+    summary.push("");
+    summary.push("_Not a guarantee of outcomes. 21+ · 1-800-GAMBLER_");
     return {
-      text: lines.join("\n"),
+      text: summary.join("\n"),
       topPlays: [],
       leans: [],
+      watch: [],
+      bySport,
       noPlay: true,
-      emptyBoard: true,
+      emptyBoard: (scanMeta.eventCount || 0) === 0,
       stamp: scanMeta.stamp,
       analyzedAt: scanMeta.scannedAt,
-      lastVerified: isoNow()
+      lastVerified: isoNow(),
+      modelVersion: MODEL_VERSION,
+      sections: { summary: summary.join("\n"), locks: "", leans: "", watch: "" }
     };
   }
 
-  if (analysis.topPlays.length) {
-    lines.push("🔥 TOP PLAYS");
-    for (const p of analysis.topPlays) {
-      lines.push("");
-      lines.push("━━━━━━━━━━━━━━━━━━");
-      lines.push("🔥 DAILY LOCK");
-      lines.push("━━━━━━━━━━━━━━━━━━");
-      lines.push(`🎯 PICK: ${p.selection}`);
-      lines.push(`🏟️ GAME: ${p.game} · ${p.sport}`);
-      lines.push(`📊 MODEL PROBABILITY: ${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}`);
-      lines.push(`💰 ODDS: ${p.price || "—"}`);
-      lines.push(`📈 EDGE: ${p.edge != null ? (p.edge >= 0 ? "+" : "") + p.edge + "%" : "n/a"}`);
-      lines.push(
-        `⚠️ RISK: ${p.redFlags?.length ? "HIGH" : p.dataQuality === "High" ? "MEDIUM" : "HIGH"}`
-      );
-      lines.push(`📡 DATA QUALITY: ${p.dataQuality || "LOW"}`);
-      lines.push(`📡 DATA STATUS: ${p.dataStatus || "ESPN snapshot"}`);
-      lines.push("");
-      lines.push("🔥 WHY IT'S SUPPORTED:");
-      for (const r of (p.top3 || []).slice(0, 3)) lines.push(`• ${r}`);
-      lines.push("");
-      lines.push(`🚨 BIGGEST RISK: ${p.biggestRisk || "Unverified injuries / lineups / market depth"}`);
-      lines.push(
-        `🕐 CREATED: ${p.analyzedAt ? new Date(p.analyzedAt).toLocaleString("en-US", { timeZone: "America/Chicago" }) : "—"}`
-      );
-      lines.push(`🔄 LAST VERIFIED: ${nowStamp()}`);
+  // LOCKS section
+  const lockLines = [];
+  if (locks.length) {
+    lockLines.push("🔥 **TOP PLAYS / LOCKS**");
+    for (const p of locks) {
+      lockLines.push("");
+      lockLines.push(formatPickLine(p, "🔒 LOCK"));
+    }
+  } else {
+    lockLines.push("🔥 **TOP PLAYS / LOCKS**");
+    lockLines.push("No verified LOCK today — strict bar held.");
+  }
+
+  // LEANS section
+  const leanLines = [];
+  if (leans.length) {
+    leanLines.push("⭐ **LEANS · FULL CARD**");
+    for (const p of leans) {
+      leanLines.push("");
+      leanLines.push(formatPickLine(p, "⭐ LEAN"));
+    }
+  } else {
+    leanLines.push("⭐ **LEANS**");
+    leanLines.push("No verified LEAN after analysis.");
+  }
+
+  // WATCH section — full analysis visibility
+  const watchLines = [];
+  if (watch.length) {
+    watchLines.push("👁 **WATCH · ANALYZED (not tickets)**");
+    watchLines.push("_Near the bar — tracked for updates, not published as plays._");
+    for (const p of watch.slice(0, 12)) {
+      watchLines.push("");
+      watchLines.push(formatPickLine(p, "👁 WATCH"));
     }
   }
 
-  if (analysis.leans.length) {
-    lines.push("");
-    lines.push("⭐ LEANS");
-    for (const p of analysis.leans) {
-      lines.push("");
-      lines.push("━━━━━━━━━━━━━━━━━━");
-      lines.push("⭐ DAILY LEAN");
-      lines.push("━━━━━━━━━━━━━━━━━━");
-      lines.push(`🎯 PICK: ${p.selection}`);
-      lines.push(`🏟️ GAME: ${p.game} · ${p.sport}`);
-      lines.push(`📊 MODEL PROBABILITY: ${p.probabilityPct != null ? p.probabilityPct + "%" : "—"}`);
-      lines.push(`💰 ODDS: ${p.price || "—"}`);
-      lines.push(`📈 EDGE: ${p.edge != null ? (p.edge >= 0 ? "+" : "") + p.edge + "%" : "n/a"}`);
-      lines.push(`⚠️ RISK: MEDIUM–HIGH`);
-      lines.push(`📡 DATA QUALITY: ${p.dataQuality || "LOW"}`);
-      lines.push(`📡 DATA STATUS: ${p.dataStatus || "ESPN snapshot"}`);
-      if (p.top3?.length) {
-        lines.push("🔥 WHY:");
-        for (const r of p.top3.slice(0, 2)) lines.push(`• ${r}`);
-      }
-      lines.push(`🚨 BIGGEST RISK: ${p.biggestRisk || "Thin evidence"}`);
-      lines.push(`🔄 LAST VERIFIED: ${nowStamp()}`);
-    }
-  }
+  const footer = [
+    "",
+    `🕐 CREATED: ${scanMeta.scannedAt || isoNow()}`,
+    `🔄 LAST VERIFIED: ${nowStamp()}`,
+    `📡 DATA: ESPN public · model ${MODEL_VERSION}`,
+    "",
+    "_Full card · evidence-first · NO PLAY preferred over inventing confidence · 21+ · 1-800-GAMBLER_"
+  ];
 
-  lines.push("");
-  lines.push("_Evidence-first process. NO PLAY preferred over inventing confidence. Not a guarantee of outcomes._");
-  lines.push("21+ · 1-800-GAMBLER");
+  const text = [
+    summary.join("\n"),
+    lockLines.join("\n"),
+    "",
+    leanLines.join("\n"),
+    watchLines.length ? "\n" + watchLines.join("\n") : "",
+    footer.join("\n")
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
-    text: lines.join("\n"),
-    topPlays: analysis.topPlays,
-    leans: analysis.leans,
-    noPlay: false,
+    text,
+    topPlays: locks,
+    leans,
+    watch,
+    bySport,
+    noPlay: locks.length + leans.length === 0,
     emptyBoard: false,
     stamp: scanMeta.stamp,
     analyzedAt: scanMeta.scannedAt,
-    lastVerified: isoNow()
+    lastVerified: isoNow(),
+    modelVersion: MODEL_VERSION,
+    sections: {
+      summary: summary.join("\n"),
+      locks: lockLines.join("\n"),
+      leans: leanLines.join("\n"),
+      watch: watchLines.join("\n")
+    }
   };
+}
+
+/** Split board into Discord-safe embed payloads (max ~3900 chars each) */
+export function boardToEmbedPayloads(board) {
+  const payloads = [];
+  const waiting = !!board?.emptyBoard || !!board?.noPlay;
+  const color = waiting ? 0x95a5a6 : 0x2ecc71;
+  const sections = board?.sections || {};
+  const chunks = [];
+
+  if (sections.summary) chunks.push({ title: "📡 FULL DAILY CARD", body: sections.summary });
+  if (sections.locks) chunks.push({ title: "🔒 LOCKS", body: sections.locks });
+  if (sections.leans) chunks.push({ title: "⭐ LEANS", body: sections.leans });
+  if (sections.watch) chunks.push({ title: "👁 WATCH", body: sections.watch });
+
+  if (!chunks.length) {
+    chunks.push({
+      title: waiting ? "📡 BOARD · NO VERIFIED / WAITING" : "📡 DAILY BOARD",
+      body: (board?.text || "No board.").slice(0, 3900)
+    });
+  }
+
+  for (const ch of chunks) {
+    // Split oversized sections
+    let body = ch.body || "";
+    while (body.length > 0) {
+      const slice = body.slice(0, 3900);
+      body = body.slice(3900);
+      payloads.push({
+        color,
+        title: ch.title,
+        description: slice,
+        footer: "EDGE PLAY · full daily card · evidence-first · 21+"
+      });
+    }
+  }
+  return payloads;
 }
 
 export async function runDailyPipeline(opts = {}) {
@@ -429,7 +585,11 @@ export async function runDailyPipeline(opts = {}) {
       tier: p.tier,
       game: p.game,
       eventId: p.eventId,
-      reasoning: p.top3 || []
+      reasoning: p.top3 || [],
+      modelVersion: MODEL_VERSION,
+      predictionVersion: 1,
+      analyzedAt: p.analyzedAt,
+      lastVerified: p.lastVerified
     }));
     const added = ingestLivePicks(toIngest);
     if (added) console.log("tracker ingest:", added, "new picks");
@@ -442,7 +602,6 @@ export async function runDailyPipeline(opts = {}) {
 export async function reverifyPicks() {
   const state = loadState();
   if (!state.picks?.length) {
-    // Still try auto-grade even with empty board
     try {
       await autoGradePending();
     } catch (e) {
@@ -466,7 +625,6 @@ export async function reverifyPicks() {
           "⚠️ STALE — REANALYSIS REQUIRED",
           `🎯 PICK: ${p.selection}`,
           `🕐 ANALYZED: ${p.analyzedAt || "—"}`,
-          `🔄 LAST VERIFIED: ${p.lastVerified || "—"}`,
           "Data older than 3h — board will auto-refresh."
         ].join("\n")
       });
@@ -485,7 +643,7 @@ export async function reverifyPicks() {
         updates.push({
           type: "RESCAN",
           pick: "BOARD",
-          message: `🔄 AUTO RESCAN complete — ${(board?.topPlays || []).length} LOCK / ${(board?.leans || []).length} LEAN · empty=${!!board?.emptyBoard}`
+          message: `🔄 AUTO RESCAN — 🔒${(board?.topPlays || []).length} · ⭐${(board?.leans || []).length} · 👁${(board?.watch || []).length}`
         });
         try {
           await autoGradePending();
@@ -522,7 +680,6 @@ export async function reverifyPicks() {
   return { updates, removed, state };
 }
 
-/** Fetch finals from ESPN and auto-grade pending ML picks */
 export async function autoGradePending() {
   const finals = [];
   for (const key of Object.keys(FEEDS)) {
