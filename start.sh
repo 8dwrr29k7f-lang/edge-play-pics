@@ -12,15 +12,16 @@ fi
 # ── Overlays ──────────────────────────────────────────────────────────────
 # ONLY apply overlays that are still additive / safe.
 # Do NOT overwrite analyticsEngine, pickFormat, lotdEmbed, liveEmbeds,
-# registerOnBoot, or index — those are the production sources of truth in src/.
+# registerOnBoot, index, or categoryEmbed — those are production sources of truth in src/.
 #
-# Safe overlays (config optional polish, mediaFollow if present):
+# categoryEmbed overlay is intentionally DISABLED: the overlay is an old static
+# desk that lacks registryEmbed / async live pipeline and crashes boot.
+#
+# Safe overlays only:
 [ -f overlay_config.js ] && cp -f overlay_config.js src/config.js && echo "Overlay: config"
 [ -f overlay_mediaFollow.js ] && cp -f overlay_mediaFollow.js src/mediaFollow.js && echo "Overlay: mediaFollow"
-[ -f overlay_categoryEmbed.js ] && cp -f overlay_categoryEmbed.js src/categoryEmbed.js && echo "Overlay: category"
 
-# Explicitly skip destructive overlays (log for operators):
-echo "Skip overlay (src is source of truth): analyticsEngine pickFormat lotdEmbed liveEmbeds registerOnBoot"
+echo "Skip overlay (src is source of truth): analyticsEngine pickFormat lotdEmbed liveEmbeds registerOnBoot categoryEmbed"
 
 # Ensure data dir exists for tracker/state persistence
 mkdir -p src/data
