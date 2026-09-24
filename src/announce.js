@@ -3,7 +3,7 @@
  */
 import { EmbedBuilder } from "discord.js";
 import { rollDailyCard, getLastBoard } from "./dailyRoll.js";
-import { reverifyPicks, getCurrentBoard } from "./dailyEngine.js";
+import { reverifyPicks, getCurrentBoard, boardToEmbedPayloads } from "./dailyEngine.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -62,22 +62,30 @@ export async function morningBundle() {
   dedupe.morningPosted = key;
   saveDedupe(dedupe);
 
-  const waiting = !!board.emptyBoard || !!board.noPlay;
-  const e = new EmbedBuilder()
-    .setColor(waiting ? 0x95a5a6 : 0x2ecc71)
-    .setTitle(
-      waiting
-        ? board.noPlay && !board.emptyBoard
-          ? "🌅 DAILY SCAN · NO PLAY"
-          : "🌅 DAILY SCAN · WAITING FOR GAMES"
-        : "🌅 DAILY SCAN · BOARD LIVE"
-    )
-    .setDescription((board.text || "Scan complete.").slice(0, 4000))
-    .setFooter({
-      text: "EDGE PLAY · evidence-first · NO PLAY when data is thin · 21+"
-    })
-    .setTimestamp();
-  return [{ embeds: [e] }];
+  const payloads = boardToEmbedPayloads(board);
+  if (!payloads.length) {
+    const waiting = !!board.emptyBoard || !!board.noPlay;
+    const e = new EmbedBuilder()
+      .setColor(waiting ? 0x95a5a6 : 0x2ecc71)
+      .setTitle("🌅 DAILY SCAN · FULL CARD")
+      .setDescription((board.text || "Scan complete.").slice(0, 4000))
+      .setFooter({ text: "EDGE PLAY · full daily card · 21+" })
+      .setTimestamp();
+    return [{ embeds: [e] }];
+  }
+  const embeds = payloads.slice(0, 8).map((pl, i) => {
+    return new EmbedBuilder()
+      .setColor(pl.color)
+      .setTitle(i === 0 ? `🌅 ${pl.title}` : pl.title)
+      .setDescription(pl.description)
+      .setFooter({ text: pl.footer || "EDGE PLAY · full daily card · 21+" })
+      .setTimestamp();
+  });
+  const out = [];
+  for (let i = 0; i < embeds.length; i += 10) {
+    out.push({ embeds: embeds.slice(i, i + 10) });
+  }
+  return out;
 }
 
 export async function eveningBundle() {
