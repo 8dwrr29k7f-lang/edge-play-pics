@@ -3,7 +3,7 @@ try {
   const require = createRequire(import.meta.url);
   require("dotenv").config();
 } catch {
-  /* Railway injects env — dotenv optional */
+  /* Railway injects env */
 }
 
 export const config = {
@@ -37,7 +37,6 @@ export const config = {
   }
 };
 
-/** Validate required env — call once at boot */
 export function assertConfig() {
   if (!config.token) {
     console.error("FATAL: Missing DISCORD_TOKEN — set it in Railway Variables");
