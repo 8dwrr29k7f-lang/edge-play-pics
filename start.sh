@@ -20,21 +20,21 @@ node patch-register.mjs || echo "WARN: patch-register"
 node overlay_takes_patch.mjs || echo "WARN: takes"
 node overlay_names_patch.mjs || echo "WARN: names"
 
-# CRITICAL: full overlays LAST (never let patches strip exports)
 [ -f overlay_config.js ] && cp -f overlay_config.js src/config.js && echo "OK config"
 [ -f overlay_pickFormat.js ] && cp -f overlay_pickFormat.js src/pickFormat.js && echo "OK pickFormat"
 [ -f overlay_lotdEmbed.js ] && cp -f overlay_lotdEmbed.js src/lotdEmbed.js && echo "OK lotdEmbed"
 [ -f overlay_liveEmbeds.js ] && cp -f overlay_liveEmbeds.js src/liveEmbeds.js && echo "OK liveEmbeds"
 [ -f overlay_analyticsEngine.js ] && cp -f overlay_analyticsEngine.js src/analyticsEngine.js && echo "OK analytics"
 [ -f overlay_categoryEmbed.js ] && cp -f overlay_categoryEmbed.js src/categoryEmbed.js && echo "OK categoryEmbed"
-[ -f overlay_dailyRoll.js ] && cp -f overlay_dailyRoll.js src/dailyRoll.js && echo "OK dailyRoll (exports restored)"
+[ -f overlay_dailyRoll.js ] && cp -f overlay_dailyRoll.js src/dailyRoll.js && echo "OK dailyRoll"
+node overlay_export_guard.mjs || echo "WARN: export_guard"
 
 node --input-type=module -e "
 import * as c from './src/config.js';
 import * as d from './src/dailyRoll.js';
 if (!c.assertConfig) { console.error('FATAL: assertConfig missing'); process.exit(1); }
 if (!d.rollDailyCard || !d.ensureTodayCard) {
-  console.error('FATAL: dailyRoll missing rollDailyCard/ensureTodayCard', Object.keys(d));
+  console.error('FATAL: dailyRoll missing exports', Object.keys(d));
   process.exit(1);
 }
 console.log('export check OK');
