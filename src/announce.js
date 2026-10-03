@@ -2,7 +2,7 @@
  * Daily automation + change announcements
  */
 import { EmbedBuilder } from "discord.js";
-import { rollDailyCard, getLastBoard } from "./dailyRoll.js";
+import { rollDailyCard } from "./dailyRoll.js";
 import { reverifyPicks, getCurrentBoard } from "./dailyEngine.js";
 import fs from "fs";
 import path from "path";
@@ -41,12 +41,20 @@ function chicagoDateKey() {
   );
 }
 
+function boardOrNull() {
+  try {
+    return getCurrentBoard();
+  } catch {
+    return null;
+  }
+}
+
 export async function morningBundle() {
   const key = chicagoDateKey();
   const dedupe = loadDedupe();
   if (dedupe.morningPosted === key) {
     console.log("morningBundle: already posted for", key, "— skip duplicate");
-    const board = getCurrentBoard() || getLastBoard();
+    const board = boardOrNull();
     const e = new EmbedBuilder()
       .setColor(0x95a5a6)
       .setTitle("🌅 DAILY SCAN · already published today")
@@ -63,28 +71,26 @@ export async function morningBundle() {
   saveDedupe(dedupe);
 
   const { boardToEmbedPayloads } = await import("./dailyEngine.js");
-  const payloads = boardToEmbedPayloads(board);
+  const payloads = typeof boardToEmbedPayloads === "function" ? boardToEmbedPayloads(board) : [];
   if (!payloads.length) {
-    const waiting = !!board.emptyBoard || !!board.noPlay;
+    const waiting = !!board?.emptyBoard || !!board?.noPlay;
     const e = new EmbedBuilder()
       .setColor(waiting ? 0x95a5a6 : 0x2ecc71)
       .setTitle("🌅 DAILY SCAN · FULL CARD")
-      .setDescription((board.text || "Scan complete.").slice(0, 4000))
+      .setDescription((board?.text || board?.note || "Scan complete.").slice(0, 4000))
       .setFooter({ text: "EDGE PLAY · full daily card · 21+" })
       .setTimestamp();
     return [{ embeds: [e] }];
   }
-  // Prefix first embed title with morning marker
   const embeds = payloads.slice(0, 8).map((pl, i) => {
     const e = new EmbedBuilder()
-      .setColor(pl.color)
+      .setColor(pl.color || 0xc4a35a)
       .setTitle(i === 0 ? `🌅 ${pl.title}` : pl.title)
-      .setDescription(pl.description)
+      .setDescription(pl.description || "—")
       .setFooter({ text: pl.footer || "EDGE PLAY · full daily card · 21+" })
       .setTimestamp();
     return e;
   });
-  // Discord allows up to 10 embeds per message; split if needed
   const out = [];
   for (let i = 0; i < embeds.length; i += 10) {
     out.push({ embeds: embeds.slice(i, i + 10) });
@@ -93,13 +99,13 @@ export async function morningBundle() {
 }
 
 export async function eveningBundle() {
-  const board = getCurrentBoard() || getLastBoard();
+  const board = boardOrNull();
   const e = new EmbedBuilder()
     .setColor(0x3498db)
     .setTitle("🌆 EVENING REVIEW")
     .setDescription(
       board
-        ? (board.text || "").slice(0, 3200) +
+        ? (board.text || board.note || "").slice(0, 3200) +
           "\n\n_Auto-grade runs from ESPN finals for pending ML picks. Manual: `/pending` then `/grade`._"
         : "No board for today."
     )
@@ -109,7 +115,9 @@ export async function eveningBundle() {
 }
 
 export async function runChangeAnnounce() {
-  const { updates, removed } = await reverifyPicks();
+  const result = await reverifyPicks();
+  const updates = result?.updates || [];
+  const removed = result?.removed || [];
   const out = [];
   for (const u of updates) {
     if (u.type === "STALE") {
@@ -119,7 +127,7 @@ export async function runChangeAnnounce() {
           new EmbedBuilder()
             .setColor(0xf39c12)
             .setTitle("⚠️ STALE PICK")
-            .setDescription(u.message)
+            .setDescription(u.message || "Stale")
             .setTimestamp()
         ]
       });
@@ -130,7 +138,7 @@ export async function runChangeAnnounce() {
           new EmbedBuilder()
             .setColor(u.type === "RESCAN" ? 0x3498db : 0xe74c3c)
             .setTitle(u.type === "RESCAN" ? "🔄 AUTO RESCAN" : "⚠️ RESCAN FAILED")
-            .setDescription(u.message)
+            .setDescription(u.message || "")
             .setTimestamp()
         ]
       });
@@ -141,7 +149,7 @@ export async function runChangeAnnounce() {
           new EmbedBuilder()
             .setColor(0x2ecc71)
             .setTitle("✅ AUTO-GRADE")
-            .setDescription(u.message)
+            .setDescription(u.message || "")
             .setTimestamp()
         ]
       });

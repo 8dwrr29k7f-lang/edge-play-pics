@@ -2,7 +2,7 @@ import { buildEvidenceAnalysis, stressTestPick } from "./analyticsEngine.js";
 /**
  * Daily auto card — builds NEW picks every calendar day (CT)
  * + live scan from ESPN public boards.
- * ALWAYS exports: rollDailyCard, ensureTodayCard, getDailyCard
+ * ALWAYS exports: rollDailyCard, ensureTodayCard, getDailyCard, getLastBoard
  */
 import fs from "fs";
 import path from "path";
@@ -12,6 +12,8 @@ import * as desk from "./data/desk.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORE = path.join(__dirname, "data", "dailyCard.json");
+
+let lastBoard = null;
 
 function ctNow() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
@@ -219,6 +221,7 @@ export async function rollDailyCard({ force = false } = {}) {
   const key = dateKey();
   const existing = loadDaily();
   if (!force && existing?.dateKey === key && existing?.picks?.length) {
+    lastBoard = existing;
     return refreshLiveFlags(existing);
   }
   let boards = [];
@@ -244,10 +247,12 @@ export async function rollDailyCard({ force = false } = {}) {
     note: "Auto-rolled from ESPN. One LOCK per category when games exist.",
     picks,
     lockOfTheDay: lockOfDay,
-    source: "espn+process"
+    source: "espn+process",
+    text: picks.slice(0, 8).map((p) => `${p.tier} ${p.selection} · ${p.game}`).join("\n")
   };
   saveDaily(card);
   applyToDesk(card);
+  lastBoard = card;
   console.log(`Daily card ${key}: ${picks.length} picks · POTD ${(lockOfDay.pick || "").slice(0, 50)}`);
   return card;
 }
@@ -258,6 +263,11 @@ export function getDailyCard() {
   return null;
 }
 
+/** Required by announce.js and other modules */
+export function getLastBoard() {
+  return lastBoard || getDailyCard() || loadDaily();
+}
+
 export async function ensureTodayCard() {
   const c = getDailyCard();
   const needsNames =
@@ -266,5 +276,6 @@ export async function ensureTodayCard() {
       /process|Confirmed SP|Soft-side|Lineup-confirmed|Wait SP|Board scan/i.test(p.selection || "")
     );
   if (needsNames) return rollDailyCard({ force: true });
+  lastBoard = c;
   return refreshLiveFlags(c);
 }
